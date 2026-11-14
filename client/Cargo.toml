@@ -1,0 +1,28 @@
+[package]
+name = "gh-token-client"
+description = "CLI client that fetches short-lived GitHub installation tokens from a gh-token server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "gh-token"
+path = "src/main.rs"
+
+[dependencies]
+gh-token-common = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+gh-token-server = { workspace = true }
+gh-token-testutil = { workspace = true }

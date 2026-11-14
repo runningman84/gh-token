@@ -1,0 +1,43 @@
+# Locks the gh-token pod down:
+# - ingress only from kubelet host probes and the configured client pods
+# - egress only to cluster DNS and api.github.com:443
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: gh-token
+  namespace: gh-token
+  labels:
+    app.kubernetes.io/name: gh-token
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: gh-token
+  ingress:
+    # Kubelet probes (liveness/readiness) originate from the node host.
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # In-cluster clients: pods in the "hermes" namespace with the
+    # app.kubernetes.io/name=hermes label. Add entries for pi/agents.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: hermes
+            k8s:app.kubernetes.io/name: hermes
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    # DNS lookups.
+    - toEntities:
+        - kube-dns
+    # GitHub API.
+    - toFQDNs:
+        - matchName: api.github.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

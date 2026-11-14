@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gh-token
+  namespace: gh-token
+  labels:
+    app.kubernetes.io/name: gh-token
+    app.kubernetes.io/instance: gh-token
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gh-token
+      app.kubernetes.io/instance: gh-token
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gh-token
+        app.kubernetes.io/instance: gh-token
+    spec:
+      serviceAccountName: gh-token
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gh-token
+          image: ghcr.io/runningman84/gh-token:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: gh-token-credentials
+          env:
+            - name: GHTS_LOG
+              value: "info"
+            - name: GHTS_LOG_JSON
+              value: "true"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 6

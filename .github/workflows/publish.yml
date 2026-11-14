@@ -1,0 +1,252 @@
+name: Publish
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Release version to publish (x.y.z)
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to publish (x.y.z)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/runningman84/gh-token
+  CHART_REPO: oci://ghcr.io/runningman84/charts/gh-token
+
+jobs:
+  binaries:
+    name: Binaries (${{ matrix.os }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            cross: true
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04
+            target: aarch64-unknown-linux-musl
+            cross: true
+          - os: darwin
+            arch: amd64
+            runner: macos-14
+            cross: false
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+            cross: false
+          - os: windows
+            arch: amd64
+            runner: windows-2022
+            cross: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: Build (cross, static musl)
+        if: matrix.cross == true
+        uses: cross-rs/action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: build --release --locked --workspace
+
+      - name: Install stable Rust
+        if: matrix.cross != true
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (native)
+        if: matrix.cross != true
+        run: cargo build --release --locked --workspace
+
+      - name: Package
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "linux" ]; then
+            SRC="target/${{ matrix.target }}/release"
+            ARCHIVE="gh-token-${{ inputs.version }}-${{ matrix.os }}-${{ matrix.arch }}.tar.gz"
+          else
+            SRC="target/release"
+            ARCHIVE="gh-token-${{ inputs.version }}-${{ matrix.os }}-${{ matrix.arch }}.tar.gz"
+            [ "${{ matrix.os }}" = "windows" ] && ARCHIVE="gh-token-${{ inputs.version }}-${{ matrix.os }}-${{ matrix.arch }}.zip"
+          fi
+          mkdir -p dist
+          cp "$SRC/gh-token-server"* "$SRC/gh-token"* dist/
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            (cd dist && tar -a -c -f "../$ARCHIVE" gh-token-server.exe gh-token.exe)
+          else
+            (cd dist && tar czf "../$ARCHIVE" gh-token-server gh-token)
+          fi
+          rm -f dist/gh-token-server* dist/gh-token*
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Upload to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "v${{ inputs.version }}" dist/* --clobber
+
+  image:
+    name: Image (linux/${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    needs: binaries
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-linux-${{ matrix.arch }}
+          path: image-ctx
+
+      - name: Prepare build context
+        run: |
+          tar xzf "image-ctx/gh-token-${{ inputs.version }}-linux-${{ matrix.arch }}.tar.gz" -C image-ctx/
+          docker run --rm -v "$PWD:/ctx" rust:stable-slim \
+            cp /etc/ssl/certs/ca-certificates.crt /ctx/image-ctx/ca-certificates.crt
+          ls -la image-ctx/
+
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push image
+        run: |
+          docker buildx build --push \
+            --platform "linux/${{ matrix.arch }}" \
+            -f Dockerfile.image \
+            -t "${IMAGE_NAME}:v${{ inputs.version }}-${{ matrix.arch }}" \
+            -t "${IMAGE_NAME}:${{ inputs.version }}-${{ matrix.arch }}" \
+            image-ctx
+
+  image-manifest:
+    name: Image manifest + SBOM + scan
+    runs-on: ubuntu-24.04
+    needs: [binaries, image]
+    steps:
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Create multi-arch manifests
+        run: |
+          VERSION="${{ inputs.version }}"
+          V="v${VERSION}"
+          MAJOR="${VERSION%%.*}"
+          MINOR="$(echo "$VERSION" | cut -d. -f1,2)"
+          for TAG in "$V" "$MINOR" "$MAJOR" "latest"; do
+            docker manifest create "${IMAGE_NAME}:${TAG}" \
+              "${IMAGE_NAME}:${V}-amd64" "${IMAGE_NAME}:${V}-arm64"
+            docker manifest annotate "${IMAGE_NAME}:${TAG}" "${IMAGE_NAME}:${V}-amd64" --arch amd64 --os linux
+            docker manifest annotate "${IMAGE_NAME}:${TAG}" "${IMAGE_NAME}:${V}-arm64" --arch arm64 --os linux
+            docker manifest push "${IMAGE_NAME}:${TAG}"
+            echo "pushed manifest ${IMAGE_NAME}:${TAG}"
+          done
+
+      - name: Generate SBOMs (Syft)
+        run: |
+          VERSION="${{ inputs.version }}"
+          mkdir -p assets
+          for ARCH in amd64 arm64; do
+            IMG="${IMAGE_NAME}:v${VERSION}-${ARCH}"
+            docker pull "$IMG"
+            docker run --rm \
+              -v "$PWD/assets:/out" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              ghcr.io/anchore/syft:latest \
+              syft image "$IMG" \
+              -o "spdx-json=/out/sbom-v${VERSION}-${ARCH}.spdx.json" \
+              -o "cyclonedx-json=/out/sbom-v${VERSION}-${ARCH}.cdx.json"
+          done
+          ls -la assets/
+
+      - name: Vulnerability scan (Grype)
+        run: |
+          VERSION="${{ inputs.version }}"
+          for ARCH in amd64 arm64; do
+            IMG="${IMAGE_NAME}:v${VERSION}-${ARCH}"
+            docker run --rm \
+              -v "$PWD/assets:/out" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              ghcr.io/anchore/grype:latest \
+              grype image "$IMG" -o table \
+              > "assets/grype-v${VERSION}-${ARCH}.txt" || true
+            docker run --rm \
+              -v "$PWD/assets:/out" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              ghcr.io/anchore/grype:latest \
+              grype image "$IMG" -o json \
+              > "assets/grype-v${VERSION}-${ARCH}.json" || true
+            docker run --rm \
+              -v "$PWD/assets:/out" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              ghcr.io/anchore/grype:latest \
+              grype image "$IMG" -o sarif \
+              > "assets/grype-v${VERSION}-${ARCH}.sarif" || true
+          done
+          ls -la assets/
+
+      - name: Upload scan assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "v${{ inputs.version }}" assets/* --clobber
+
+  chart:
+    name: Helm chart (OCI)
+    runs-on: ubuntu-24.04
+    needs: binaries
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Lint
+        run: helm lint chart
+
+      - name: Package and push to OCI registry
+        env:
+          HELM_REPOSITORY_USERNAME: ${{ github.actor }}
+          HELM_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          helm package chart -d dist/
+          helm push "dist/gh-token-${{ inputs.version }}.tgz" "${CHART_REPO}"
+
+      - name: Upload chart to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "v${{ inputs.version }}" "dist/gh-token-${{ inputs.version }}.tgz" --clobber

@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yml
+
+  release:
+    name: Semantic release
+    runs-on: ubuntu-24.04
+    needs: test
+    outputs:
+      created: ${{ steps.release.outputs.created }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install release tooling
+        run: npm ci
+
+      - name: Semantic release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BEFORE_COUNT=$(git tag --list 'v*' | wc -l)
+          npx semantic-release
+          AFTER_COUNT=$(git tag --list 'v*' | wc -l)
+          if [ "$AFTER_COUNT" -gt "$BEFORE_COUNT" ]; then
+            NEW_TAG=$(git tag --sort=-v:refname --list 'v*' | head -n 1)
+            echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "version=${NEW_TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "Released version ${NEW_TAG#v}"
+          else
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "No release was created"
+          fi
+
+  publish:
+    name: Publish
+    runs-on: ubuntu-24.04
+    needs: [test, release]
+    if: needs.release.outputs.created == 'true'
+    uses: ./.github/workflows/publish.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit

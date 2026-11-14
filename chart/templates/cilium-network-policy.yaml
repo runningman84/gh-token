@@ -1,0 +1,46 @@
+{{- if .Values.cilium.enabled }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "gh-token.fullname" . }}
+  labels:
+    {{- include "gh-token.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "gh-token.selectorLabels" . | nindent 6 }}
+  ingress:
+    # Kubelet liveness/readiness probes originate from the node host.
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "{{ .Values.service.port }}"
+              protocol: TCP
+    {{- if .Values.cilium.clients }}
+    # In-cluster clients allowed to request tokens.
+    - fromEndpoints:
+        {{- range .Values.cilium.clients }}
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .namespace }}
+            {{- range $key, $value := .labels }}
+            k8s:{{ $key }}: {{ $value }}
+            {{- end }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: "{{ .Values.service.port }}"
+              protocol: TCP
+    {{- end }}
+  egress:
+    # Cluster DNS.
+    - toEntities:
+        - kube-dns
+    # GitHub API.
+    - toFQDNs:
+        - matchName: {{ .Values.cilium.egressGitHubFqdn }}
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+{{- end }}

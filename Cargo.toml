@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["common", "server", "client", "testutil"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/runningman84/gh-token"
+rust-version = "1.88"
+
+[workspace.dependencies]
+anyhow = "1"
+axum = "0.8"
+base64 = "0.23"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+gh-token-common = { path = "common" }
+gh-token-server = { path = "server" }
+gh-token-testutil = { path = "testutil" }
+jsonwebtoken = { version = "12", features = ["rust_crypto"] }
+prometheus = "0.14"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "net", "sync", "process"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

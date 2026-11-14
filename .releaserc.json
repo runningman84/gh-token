@@ -1,0 +1,44 @@
+{
+  "branches": ["main"],
+  "tagFormat": "v${version}",
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "CHANGELOG.md",
+        "changelogTitle": "# Changelog\n"
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "publishCmd": "node scripts/bump-version.mjs ${nextRelease.version} && cargo update --workspace --quiet && npm install --package-lock-only --no-audit --no-fund"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": [
+          "CHANGELOG.md",
+          "Cargo.toml",
+          "Cargo.lock",
+          "chart/Chart.yaml",
+          "chart/values.yaml",
+          "package.json",
+          "package-lock.json"
+        ],
+        "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "successComment": false,
+        "failTitle": "# Release ${nextRelease.version} failed",
+        "labels": false
+      }
+    ]
+  ]
+}

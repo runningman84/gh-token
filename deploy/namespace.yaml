@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gh-token
+  labels:
+    app.kubernetes.io/name: gh-token
+    app.kubernetes.io/managed-by: Helm

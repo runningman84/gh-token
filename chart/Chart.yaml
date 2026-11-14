@@ -1,0 +1,16 @@
+apiVersion: v2
+name: gh-token
+description: Issues short-lived GitHub App installation tokens to in-cluster clients
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/runningman84/gh-token
+sources:
+  - https://github.com/runningman84/gh-token
+keywords:
+  - github
+  - github-app
+  - token
+  - vault
+maintainers:
+  - name: runningman84

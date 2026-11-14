@@ -1,0 +1,20 @@
+gh-token has been deployed.
+
+The server is reachable in-cluster at:
+
+    http://{{ include "gh-token.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain | default "cluster.local" }}:{{ .Values.service.port }}
+
+Fetch a token with the gh-token client:
+
+    gh-token --client hermes
+
+Or directly (from inside the cluster):
+
+    curl 'http://{{ include "gh-token.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/token?client=hermes'
+
+{{- if .Values.secret.apiKey }}
+
+The server requires an API key. Pass it with:
+
+    gh-token --client hermes --api-key <key>
+{{- end }}

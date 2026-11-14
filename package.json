@@ -1,0 +1,18 @@
+{
+  "name": "gh-token",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Release tooling (semantic-release, commitlint) for the gh-token project",
+  "scripts": {
+    "release": "semantic-release",
+    "commitlint": "commitlint"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/git": "^10.0.1",
+    "semantic-release": "^24.2.0"
+  }
+}

@@ -1,0 +1,101 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  docker:
+    name: Docker image build
+    runs-on: ubuntu-24.04
+    needs: rust
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image (amd64, default target)
+        run: docker build -t gh-token:test .
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Sample values
+        run: |
+          cat > /tmp/values.yaml <<'EOF'
+          secret:
+            data:
+              GH_APP_ID: "1234567"
+              GH_APP_INSTALLATION_ID: "7654321"
+              GH_APP_KEY_B64: "dGVzdA=="
+            apiKey: "test-key"
+          cilium:
+            enabled: true
+            clients:
+              - namespace: hermes
+                labels:
+                  app.kubernetes.io/name: hermes
+          serviceMonitor:
+            enabled: true
+          EOF
+
+      - name: Lint
+        run: helm lint chart -f /tmp/values.yaml
+
+      - name: Template
+        run: |
+          helm template test chart -f /tmp/values.yaml > /tmp/rendered.yaml
+          test -s /tmp/rendered.yaml
+
+      - name: Schema validation (missing secret name)
+        run: |
+          # secret.create=false without secret.name must be rejected.
+          if helm template test chart \
+              --set secret.create=false \
+              --set 'secret.data.GH_APP_ID=1' \
+              --set 'secret.data.GH_APP_INSTALLATION_ID=2' \
+              --set 'secret.data.GH_APP_KEY_B64=ZA==' > /dev/null 2>&1; then
+            echo "expected helm to reject missing secret.name"
+            exit 1
+          fi

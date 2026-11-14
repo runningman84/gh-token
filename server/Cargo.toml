@@ -1,0 +1,33 @@
+[package]
+name = "gh-token-server"
+description = "Service that issues short-lived GitHub App installation tokens to in-cluster clients"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "gh-token-server"
+path = "src/main.rs"
+
+[dependencies]
+gh-token-common = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+jsonwebtoken = { workspace = true }
+prometheus = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+gh-token-testutil = { workspace = true }
+tracing-subscriber = { workspace = true }

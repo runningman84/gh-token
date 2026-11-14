@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "secret": {
+      "type": "object",
+      "required": ["create"],
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "apiKey": { "type": "string" },
+        "data": {
+          "type": "object",
+          "required": ["GH_APP_ID", "GH_APP_INSTALLATION_ID", "GH_APP_KEY_B64"],
+          "properties": {
+            "GH_APP_ID": { "type": "string" },
+            "GH_APP_INSTALLATION_ID": { "type": "string" },
+            "GH_APP_KEY_B64": { "type": "string" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "create": { "const": false } }
+          },
+          "then": {
+            "required": ["name"],
+            "properties": { "name": { "minLength": 1 } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "create": { "const": true } }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "GH_APP_KEY_B64": { "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": { "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    }
+  }
+}

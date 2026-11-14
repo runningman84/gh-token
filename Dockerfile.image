@@ -1,0 +1,9 @@
+# Minimal image used by the publish pipeline: the context contains the
+# cross-built static binary (gh-token-server) and the CA bundle
+# (ca-certificates.crt).
+FROM gcr.io/distroless/static:nonroot
+COPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY gh-token-server /usr/local/bin/gh-token-server
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/gh-token-server"]

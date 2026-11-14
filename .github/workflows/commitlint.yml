@@ -1,0 +1,30 @@
+name: Commitlint
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  commitlint:
+    name: Conventional commits
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install commit tooling
+        run: npm ci
+
+      - name: Commitlint
+        run: npx commitlint --from=origin/main --to=HEAD
