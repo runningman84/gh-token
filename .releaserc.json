@@ -14,7 +14,7 @@
     [
       "@semantic-release/exec",
       {
-        "publishCmd": "node scripts/bump-version.mjs ${nextRelease.version} && cargo update --workspace --quiet && npm install --package-lock-only --no-audit --no-fund"
+        "prepareCmd": "node scripts/bump-version.mjs ${nextRelease.version} && cargo update --workspace --quiet && npm install --package-lock-only --no-audit --no-fund"
       }
     ],
     [
