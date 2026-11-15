@@ -265,6 +265,7 @@ gh pr view 42
 | `ghts_rate_limit_rejections_total` | counter | Rate-limit rejections |
 | `ghts_github_reachable` | gauge | Last probe outcome (1/0) |
 | `ghts_startup_check_ok` | gauge | 1 if the startup credential validation passed |
+| `ghts_build_info{version}` | gauge | Build information (1 for the running version) |
 
 Standard process metrics (names follow the Prometheus process-collector
 convention, no prefix — standard dashboards/alerts apply unchanged):

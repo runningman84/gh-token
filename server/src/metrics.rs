@@ -1,8 +1,8 @@
 //! Prometheus metrics.
 
 use prometheus::{
-    Counter, Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, Opts, Registry,
-    TextEncoder,
+    Counter, Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts,
+    Registry, TextEncoder,
 };
 use std::sync::Arc;
 
@@ -149,6 +149,18 @@ impl Metrics {
         )
         .expect("valid metric");
 
+        let build_info = IntGaugeVec::new(
+            Opts::new(
+                "ghts_build_info",
+                "Build information (version) of the server.",
+            ),
+            &["version"],
+        )
+        .expect("valid metric");
+        build_info
+            .with_label_values(&[env!("CARGO_PKG_VERSION")])
+            .set(1);
+
         let github_requests = IntCounterVec::new(
             Opts::new(
                 "ghts_github_requests_total",
@@ -230,6 +242,7 @@ impl Metrics {
             Box::new(rate_limit_rejections.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(github_reachable.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(startup_check_ok.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(build_info.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(github_requests.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(github_request_duration.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(process_resident_memory_bytes.clone()) as Box<dyn prometheus::core::Collector>,

@@ -351,6 +351,7 @@ async fn metrics_endpoint_exposes_prometheus_metrics() {
         "ghts_github_requests_total",
         "ghts_github_request_duration_seconds",
         "ghts_token_request_duration_seconds",
+        "ghts_build_info",
     ] {
         assert!(text.contains(metric), "metrics should contain {metric}");
     }
