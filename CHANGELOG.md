@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [1.0.1](https://github.com/runningman84/gh-token/compare/v1.0.0...v1.0.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* build release binaries natively instead of via a missing action ([54f97cf](https://github.com/runningman84/gh-token/commit/54f97cf213e8bb6ff004e8496d38c2e84e700818))
+
 # 1.0.0 (2026-11-15)
 
 
