@@ -1,12 +1,26 @@
 //! Entry point for the gh-token server.
 
+use clap::Parser;
 use gh_token_server::app::{self, Server};
 use gh_token_server::config::{self, Config};
 use tracing::{error, info};
 
+/// Service that issues short-lived GitHub App installation tokens to clients.
+#[derive(Parser)]
+#[command(name = "gh-token-server", version, about)]
+struct Cli;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Parse arguments first so `--version` and `--help` work without any
+    // credentials being configured.
+    let _cli = Cli::parse();
+
     config::init_logging();
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "gh-token server starting"
+    );
 
     let cfg = match Config::from_env() {
         Ok(cfg) => cfg,
