@@ -40,20 +40,13 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             rustflags: "-C target-feature=+crt-static"
-          - os: darwin
-            arch: amd64
-            runner: macos-14
-            target: x86_64-apple-darwin
-            rustflags: ""
+          # darwin-amd64 (macos-14) and windows (x86_64-pc-windows-msvc) are
+          # intentionally excluded for now: Intel-mac runners are flaky and the
+          # Windows build fails on reqwest's rustls -> aws-lc-sys C dependency.
           - os: darwin
             arch: arm64
             runner: macos-15
             target: aarch64-apple-darwin
-            rustflags: ""
-          - os: windows
-            arch: amd64
-            runner: windows-2022
-            target: x86_64-pc-windows-msvc
             rustflags: ""
     steps:
       - name: Checkout
@@ -80,15 +73,12 @@ jobs:
         run: |
           SRC="target/${{ matrix.target }}/release"
           ARCHIVE="gh-token-${{ inputs.version }}-${{ matrix.os }}-${{ matrix.arch }}.tar.gz"
-          [ "${{ matrix.os }}" = "windows" ] && ARCHIVE="gh-token-${{ inputs.version }}-${{ matrix.os }}-${{ matrix.arch }}.zip"
           mkdir -p dist
-          cp "$SRC/gh-token-server"* "$SRC/gh-token"* dist/
-          if [ "${{ matrix.os }}" = "windows" ]; then
-            (cd dist && tar -a -c -f "../$ARCHIVE" gh-token-server.exe gh-token.exe)
-          else
-            (cd dist && tar czf "../$ARCHIVE" gh-token-server gh-token)
-          fi
-          rm -f dist/gh-token-server* dist/gh-token*
+          cp "$SRC/gh-token-server" "$SRC/gh-token" dist/
+          # Archive inside dist/ so the artifact (dist/*) contains the tarball.
+          (cd dist && tar czf "$ARCHIVE" gh-token-server gh-token)
+          # Keep only the archive in the artifact.
+          find dist -maxdepth 1 -type f ! -name "$ARCHIVE" -delete
           ls -la dist/
 
       - name: Upload artifact
