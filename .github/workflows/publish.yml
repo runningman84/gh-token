@@ -115,8 +115,10 @@ jobs:
       - name: Prepare build context
         run: |
           tar xzf "image-ctx/gh-token-${{ inputs.version }}-linux-${{ matrix.arch }}.tar.gz" -C image-ctx/
-          docker run --rm -v "$PWD:/ctx" rust:stable-slim \
-            cp /etc/ssl/certs/ca-certificates.crt /ctx/image-ctx/ca-certificates.crt
+          # reqwest uses the platform certificate store, so bundle the CA
+          # certificates. The runner's Mozilla CA bundle is equivalent to the
+          # one the image would otherwise ship.
+          cp /etc/ssl/certs/ca-certificates.crt image-ctx/ca-certificates.crt
           ls -la image-ctx/
 
       - name: Log in to GitHub Container Registry
@@ -222,7 +224,17 @@ jobs:
           version: v3.17.0
 
       - name: Lint
-        run: helm lint chart
+        run: |
+          # The chart schema requires a non-empty app key when secret.create
+          # is true (the default), so lint with sample values.
+          cat > /tmp/values.yaml <<'EOF'
+          secret:
+            data:
+              GH_APP_ID: "1234567"
+              GH_APP_INSTALLATION_ID: "7654321"
+              GH_APP_KEY_B64: "dGVzdA=="
+          EOF
+          helm lint chart -f /tmp/values.yaml
 
       - name: Package and push to OCI registry
         env:
