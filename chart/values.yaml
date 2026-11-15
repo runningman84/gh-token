@@ -135,8 +135,11 @@ serviceMonitor:
 cilium:
   enabled: false
   # Client pods that may call the token endpoint.
-  clients:
-    - namespace: hermes
-      labels:
-        app.kubernetes.io/name: hermes
+  # Client pods that may call the token endpoint. Specify your own clients;
+  # this policy allows no client pods by default.
+  clients: []
+  # Example:
+  # - namespace: my-agent
+  #   labels:
+  #     app.kubernetes.io/name: my-agent
   egressGitHubFqdn: api.github.com
