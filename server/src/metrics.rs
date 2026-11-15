@@ -177,13 +177,13 @@ impl Metrics {
         .expect("valid metric");
 
         // GitHub API rate limit metrics (from GET /rate_limit)
-        // Labels: service (e.g., "github"), resource (e.g., "core", "search", "graphql", "integration_manifest")
+        // Label: resource (e.g., "core", "search", "graphql", "integration_manifest")
         let github_rate_limit_limit = IntGaugeVec::new(
             Opts::new(
                 "ghts_github_rate_limit_limit",
                 "GitHub API rate limit (maximum requests) by resource.",
             ),
-            &["service", "resource"],
+            &["resource"],
         )
         .expect("valid metric");
 
@@ -192,7 +192,7 @@ impl Metrics {
                 "ghts_github_rate_limit_used",
                 "GitHub API rate limit used (requests consumed) by resource.",
             ),
-            &["service", "resource"],
+            &["resource"],
         )
         .expect("valid metric");
 
@@ -201,7 +201,7 @@ impl Metrics {
                 "ghts_github_rate_limit_remaining",
                 "GitHub API rate limit remaining (requests available) by resource.",
             ),
-            &["service", "resource"],
+            &["resource"],
         )
         .expect("valid metric");
 
@@ -210,7 +210,7 @@ impl Metrics {
                 "ghts_github_rate_limit_reset_timestamp",
                 "GitHub API rate limit reset time (Unix timestamp) by resource.",
             ),
-            &["service", "resource"],
+            &["resource"],
         )
         .expect("valid metric");
 
@@ -415,21 +415,27 @@ impl Metrics {
     }
 
     /// Updates GitHub API rate limit metrics from a /rate_limit response.
-    /// `service` identifies the API (e.g., "github"), `resource` is the
-    /// rate limit category (e.g., "core", "search", "graphql",
+    /// `resource` is the rate limit category (e.g., "core", "search", "graphql",
     /// "integration_manifest").
-    pub fn github_rate_limit(&self, service: &str, resource: &str, limit: i64, used: i64, remaining: i64, reset: i64) {
+    pub fn github_rate_limit(
+        &self,
+        resource: &str,
+        limit: i64,
+        used: i64,
+        remaining: i64,
+        reset: i64,
+    ) {
         self.github_rate_limit_limit
-            .with_label_values(&[service, resource])
+            .with_label_values(&[resource])
             .set(limit);
         self.github_rate_limit_used
-            .with_label_values(&[service, resource])
+            .with_label_values(&[resource])
             .set(used);
         self.github_rate_limit_remaining
-            .with_label_values(&[service, resource])
+            .with_label_values(&[resource])
             .set(remaining);
         self.github_rate_limit_reset
-            .with_label_values(&[service, resource])
+            .with_label_values(&[resource])
             .set(reset);
     }
 

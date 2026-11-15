@@ -102,7 +102,13 @@ impl Cli {
 pub async fn run(cli: &Cli) -> Result<()> {
     init_logging();
     let base_url = cli.base_url();
-    let user_agent = format!("{}/{} ({}) / {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"), cli.client_name(), env!("CARGO_PKG_REPOSITORY"));
+    let user_agent = format!(
+        "{}/{} ({}) / {}",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+        cli.client_name(),
+        env!("CARGO_PKG_REPOSITORY")
+    );
     let client = Client::builder()
         .timeout(Duration::from_secs(cli.timeout.max(1)))
         .user_agent(&user_agent)

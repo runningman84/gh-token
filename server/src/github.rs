@@ -100,6 +100,23 @@ pub struct InstallationToken {
     pub expires_at: DateTime<Utc>,
 }
 
+/// Rate limit information for a single resource (from `GET /rate_limit`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct RateLimitResource {
+    limit: u64,
+    used: u64,
+    remaining: u64,
+    reset: u64,
+}
+
+/// Full rate limit response from `GET /rate_limit`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct RateLimitResponse {
+    resources: std::collections::HashMap<String, RateLimitResource>,
+}
+
 /// How a request authenticates (only used for logging, never logged raw).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Auth {
@@ -501,6 +518,18 @@ impl GithubClient {
         }
         if resp.status.is_success() {
             self.record_success();
+            // Parse and expose rate limit metrics
+            if let Ok(rate_limit) = serde_json::from_str::<RateLimitResponse>(&resp.body) {
+                for (resource, rl) in rate_limit.resources {
+                    self.metrics.github_rate_limit(
+                        &resource,
+                        rl.limit as i64,
+                        rl.used as i64,
+                        rl.remaining as i64,
+                        rl.reset as i64,
+                    );
+                }
+            }
             Ok(())
         } else {
             Err(GithubError::new(format!(
