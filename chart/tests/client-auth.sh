@@ -51,4 +51,19 @@ for key in GHTS_API_KEY GHTS_CLIENT_KEYS GHTS_CLIENT_KEYS_DIR GHTS_REQUIRE_KNOWN
   reject "${args[@]}" --set "env.$key=conflict"
   reject "${args[@]}" --set "secret.data.$key=conflict"
 done
-echo 'clientAuth chart tests passed'
+
+helm template test "$chart" --set secret.create=false --set secret.name=github-app \
+  --set cilium.enabled=true \
+  --set cilium.ingressFrom[0].fromEntities[0]=world \
+  --set cilium.egressTo[0].toEntities[0]=cluster > "$tmp/cilium"
+grep -Fq -- '- fromEntities:' "$tmp/cilium"
+grep -Fq -- '- toEntities:' "$tmp/cilium"
+
+helm template test "$chart" --set secret.create=false --set secret.name=github-app \
+  --set networkPolicy.enabled=true \
+  --set networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.name=agents \
+  --set networkPolicy.egressTo[0].namespaceSelector.matchLabels.name=logging > "$tmp/network-policy"
+grep -Fq 'kind: NetworkPolicy' "$tmp/network-policy"
+grep -Fq 'name: agents' "$tmp/network-policy"
+grep -Fq 'name: logging' "$tmp/network-policy"
+echo 'chart tests passed'

@@ -134,7 +134,6 @@ serviceMonitor:
 # reach out to.
 cilium:
   enabled: false
-  # Client pods that may call the token endpoint.
   # Client pods that may call the token endpoint. Specify your own clients;
   # this policy allows no client pods by default.
   clients: []
@@ -143,3 +142,43 @@ cilium:
   #   labels:
   #     app.kubernetes.io/name: my-agent
   egressGitHubFqdn: api.github.com
+  # Additional Cilium-specific ingress rules (CiliumNetworkPolicy ingress rules).
+  # Each entry is a full Cilium ingress rule object.
+  # Example:
+  # ingressFrom:
+  #   - fromEntities:
+  #       - world
+  ingressFrom: []
+  # Additional Cilium-specific egress rules.
+  # Example:
+  # egressTo:
+  #   - toFQDNs:
+  #       - matchName: my-service.example.com
+  egressTo: []
+
+# Standard Kubernetes NetworkPolicy (works with Calico, Weave, Antrea, etc.).
+# Can be used alongside or instead of the Cilium policy.
+networkPolicy:
+  enabled: false
+  # Additional ingress rules (e.g., for custom monitoring, load balancers).
+  # Each entry is a full NetworkPolicyPeer object.
+  # Example:
+  # ingressFrom:
+  #   - podSelector:
+  #       matchLabels:
+  #         app: my-monitor
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         name: monitoring
+  ingressFrom: []
+  # Additional egress rules (e.g., for external logging, metrics).
+  # Each entry is a full NetworkPolicyPeer object.
+  # Example:
+  # egressTo:
+  #   - podSelector:
+  #       matchLabels:
+  #         app: log-collector
+  #     namespaceSelector:
+  #       matchLabels:
+  #         name: logging
+  egressTo: []
