@@ -1,10 +1,11 @@
 //! axum HTTP handlers.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{SecondsFormat, Utc};
@@ -126,6 +127,7 @@ pub struct TokenBody {
 /// `GET|POST /token` — issue (or return the cached) installation token.
 pub async fn token(
     State(state): State<Arc<ServerState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Query(query): Query<TokenQuery>,
     headers: HeaderMap,
     body: Option<Json<TokenBody>>,
@@ -138,8 +140,12 @@ pub async fn token(
         .clone()
         .or(query.client.clone())
         .unwrap_or_default();
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
     if !is_valid_client_id(&client) {
-        warn!(client = %client, "token request rejected: invalid client identifier");
+        warn!(client = %client, client_ip = %addr, user_agent = %user_agent, "token request rejected: invalid client identifier");
         return finish(
             &state,
             &client,
@@ -177,7 +183,7 @@ pub async fn token(
         match extract_api_key(&headers) {
             Some(provided) if constant_time_eq(provided.as_bytes(), expected.as_bytes()) => {}
             Some(_) => {
-                warn!(client, "token request rejected: invalid API key");
+                warn!(client, client_ip = %addr, user_agent = %user_agent, "token request rejected: invalid API key");
                 return finish(
                     &state,
                     &client,
@@ -187,7 +193,7 @@ pub async fn token(
                 );
             }
             None => {
-                warn!(client, "token request rejected: missing API key");
+                warn!(client, client_ip = %addr, user_agent = %user_agent, "token request rejected: missing API key");
                 return finish(
                     &state,
                     &client,
@@ -208,7 +214,7 @@ pub async fn token(
         match extract_api_key(&headers) {
             Some(provided) if constant_time_eq(provided.as_bytes(), expected.as_bytes()) => {}
             Some(_) => {
-                warn!(client, "token request rejected: invalid client key");
+                warn!(client, client_ip = %addr, user_agent = %user_agent, "token request rejected: invalid client key");
                 return finish(
                     &state,
                     &client,
@@ -218,7 +224,7 @@ pub async fn token(
                 );
             }
             None => {
-                warn!(client, "token request rejected: missing client key");
+                warn!(client, client_ip = %addr, user_agent = %user_agent, "token request rejected: missing client key");
                 return finish(
                     &state,
                     &client,
@@ -237,6 +243,8 @@ pub async fn token(
         state.metrics.rate_limit_rejected();
         warn!(
             client,
+            client_ip = %addr,
+            user_agent = %user_agent,
             retry_after_secs = retry_after.as_secs(),
             "token request rejected: rate limit exceeded"
         );
@@ -287,7 +295,7 @@ pub async fn token(
         }
         state.store.put(&client, served.clone()).await;
         state.metrics.tokens_served_cached();
-        debug!(client, token = %mask_token(&served.token), "serving cached token");
+        debug!(client, client_ip = %addr, user_agent = %user_agent, token = %mask_token(&served.token), "serving cached token");
         return finish(
             &state,
             &client,
@@ -317,6 +325,8 @@ pub async fn token(
             state.metrics.set_active_tokens(state.store.len().await);
             info!(
                 client,
+                client_ip = %addr,
+                user_agent = %user_agent,
                 token = %mask_token(&new.token),
                 ttl_secs = requested_ttl,
                 purpose = ?purpose,
@@ -334,11 +344,7 @@ pub async fn token(
             record_gh_error(&state.metrics, "create_token", &e);
             state.update_cooldown_metric();
             if let Some(wait) = e.retry_after() {
-                warn!(
-                    client,
-                    wait_secs = wait.as_secs(),
-                    "token creation deferred: github rate limited"
-                );
+                warn!(client, client_ip = %addr, user_agent = %user_agent, wait_secs = wait.as_secs(), "token creation deferred: github rate limited");
                 let mut resp = json_error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "github is rate limiting; please retry later",
@@ -352,7 +358,7 @@ pub async fn token(
                 );
                 return finish(&state, &client, "503", started, resp);
             }
-            warn!(client, %e, "failed to create installation token from GitHub");
+            warn!(client, client_ip = %addr, user_agent = %user_agent, %e, "failed to create installation token from GitHub");
             finish(
                 &state,
                 &client,

@@ -324,7 +324,7 @@ impl Server {
         tokio::spawn(async move {
             tokio::select! {
                 _ = serve_stop.cancelled() => {}
-                res = axum::serve(listener, router) => {
+                res = axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()) => {
                     if let Err(err) = res {
                         warn!(%err, "axum serve loop ended");
                     }

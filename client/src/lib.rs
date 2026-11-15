@@ -102,8 +102,10 @@ impl Cli {
 pub async fn run(cli: &Cli) -> Result<()> {
     init_logging();
     let base_url = cli.base_url();
+    let user_agent = format!("{}/{} ({}) / {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"), cli.client_name(), env!("CARGO_PKG_REPOSITORY"));
     let client = Client::builder()
         .timeout(Duration::from_secs(cli.timeout.max(1)))
+        .user_agent(&user_agent)
         .build()
         .context("building HTTP client")?;
 
@@ -236,6 +238,7 @@ async fn probe(client: &Client, url: &str, api_key: &Option<String>) -> String {
     if let Some(key) = api_key {
         req = req.header("x-gh-token-key", key);
     }
+    // Note: user_agent is already set on the Client builder
     match req.send().await {
         Ok(resp) => {
             let status = resp.status();

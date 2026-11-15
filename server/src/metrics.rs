@@ -30,6 +30,11 @@ pub struct Metrics {
     startup_check_ok: IntGauge,
     github_requests: IntCounterVec,
     github_request_duration: prometheus::HistogramVec,
+    // GitHub API rate limit metrics (from GET /rate_limit)
+    github_rate_limit_limit: IntGaugeVec,
+    github_rate_limit_used: IntGaugeVec,
+    github_rate_limit_remaining: IntGaugeVec,
+    github_rate_limit_reset: IntGaugeVec,
     // Standard process metrics (names match the Prometheus process
     // collector conventions, no ghts_ prefix).
     process_resident_memory_bytes: IntGauge,
@@ -171,6 +176,44 @@ impl Metrics {
         )
         .expect("valid metric");
 
+        // GitHub API rate limit metrics (from GET /rate_limit)
+        // Labels: service (e.g., "github"), resource (e.g., "core", "search", "graphql", "integration_manifest")
+        let github_rate_limit_limit = IntGaugeVec::new(
+            Opts::new(
+                "ghts_github_rate_limit_limit",
+                "GitHub API rate limit (maximum requests) by resource.",
+            ),
+            &["service", "resource"],
+        )
+        .expect("valid metric");
+
+        let github_rate_limit_used = IntGaugeVec::new(
+            Opts::new(
+                "ghts_github_rate_limit_used",
+                "GitHub API rate limit used (requests consumed) by resource.",
+            ),
+            &["service", "resource"],
+        )
+        .expect("valid metric");
+
+        let github_rate_limit_remaining = IntGaugeVec::new(
+            Opts::new(
+                "ghts_github_rate_limit_remaining",
+                "GitHub API rate limit remaining (requests available) by resource.",
+            ),
+            &["service", "resource"],
+        )
+        .expect("valid metric");
+
+        let github_rate_limit_reset = IntGaugeVec::new(
+            Opts::new(
+                "ghts_github_rate_limit_reset_timestamp",
+                "GitHub API rate limit reset time (Unix timestamp) by resource.",
+            ),
+            &["service", "resource"],
+        )
+        .expect("valid metric");
+
         let github_request_duration = prometheus::HistogramVec::new(
             HistogramOpts::new(
                 "ghts_github_request_duration_seconds",
@@ -245,6 +288,10 @@ impl Metrics {
             Box::new(build_info.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(github_requests.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(github_request_duration.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(github_rate_limit_limit.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(github_rate_limit_used.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(github_rate_limit_remaining.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(github_rate_limit_reset.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(process_resident_memory_bytes.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(process_resident_memory_peak_bytes.clone())
                 as Box<dyn prometheus::core::Collector>,
@@ -276,6 +323,10 @@ impl Metrics {
             startup_check_ok,
             github_requests,
             github_request_duration,
+            github_rate_limit_limit,
+            github_rate_limit_used,
+            github_rate_limit_remaining,
+            github_rate_limit_reset,
             process_resident_memory_bytes,
             process_resident_memory_peak_bytes,
             process_virtual_memory_bytes,
@@ -361,6 +412,25 @@ impl Metrics {
         self.github_request_duration
             .with_label_values(&[path])
             .observe(secs);
+    }
+
+    /// Updates GitHub API rate limit metrics from a /rate_limit response.
+    /// `service` identifies the API (e.g., "github"), `resource` is the
+    /// rate limit category (e.g., "core", "search", "graphql",
+    /// "integration_manifest").
+    pub fn github_rate_limit(&self, service: &str, resource: &str, limit: i64, used: i64, remaining: i64, reset: i64) {
+        self.github_rate_limit_limit
+            .with_label_values(&[service, resource])
+            .set(limit);
+        self.github_rate_limit_used
+            .with_label_values(&[service, resource])
+            .set(used);
+        self.github_rate_limit_remaining
+            .with_label_values(&[service, resource])
+            .set(remaining);
+        self.github_rate_limit_reset
+            .with_label_values(&[service, resource])
+            .set(reset);
     }
 
     /// Refreshes the standard `process_*` metrics for the current process
