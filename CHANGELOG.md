@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [1.0.3](https://github.com/runningman84/gh-token/compare/v1.0.2...v1.0.3) (2026-11-15)
+
+
+### Bug Fixes
+
+* repair image and helm-chart publishing steps ([f89b955](https://github.com/runningman84/gh-token/commit/f89b9553fc7243ac7e19b7f36b09bec2d556162f))
+
 ## [1.0.2](https://github.com/runningman84/gh-token/compare/v1.0.1...v1.0.2) (2026-11-15)
 
 
