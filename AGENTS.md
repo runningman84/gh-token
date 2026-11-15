@@ -145,6 +145,46 @@ ci: add Grype vulnerability scan to release pipeline
 - GitHub releases, container images, Helm chart, and binaries are published automatically
 - Non-conforming commits break the release pipeline
 
+## Branching Strategy & Release Flow
+
+**Commits must be made on `develop` or feature branches, not directly on `main`.**
+
+```
+feature/xxx  ──PR──▶  develop  ──PR──▶  main (triggers release)
+```
+
+### Workflow
+
+1. **Create a branch** from `develop`:
+   ```sh
+   git checkout develop && git pull
+   git checkout -b feat/my-feature
+   ```
+
+2. **Commit** using Conventional Commits format (see above)
+
+3. **Push** your branch and open a **Pull Request** targeting `develop`
+
+4. **CI runs** on the PR (tests, lint, build)
+
+5. **Merge to `develop`** after review — this does **not** trigger a release
+
+6. **When ready to release**, open a PR from `develop` → `main`
+
+7. **Merge to `main`** — **this triggers `semantic-release`**:
+   - Analyzes all commits since the last release tag
+   - Determines version bump (major/minor/patch)
+   - Creates Git tag `vX.Y.Z`
+   - Updates `Cargo.toml` workspace version, `chart/Chart.yaml`, `package.json`
+   - Publishes GitHub Release, container images, Helm chart, binaries
+
+### Why This Matters
+
+- **Releases only happen on `main`** — merging to `develop` is safe for integration
+- **`develop` accumulates changes** until you're ready to cut a release
+- **PRs enable review** and CI validation before code reaches `main`
+- **semantic-release sees a clean history** of conventional commits on `main`
+
 ## Code Style
 
 - **Rust 2024 edition**, workspace-wide `rustfmt.toml` (if present) or default style
