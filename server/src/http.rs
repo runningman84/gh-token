@@ -92,6 +92,17 @@ pub async fn ready(State(state): State<Arc<ServerState>>) -> Response {
         .into_response()
 }
 
+/// `GET /permissions` — GitHub App and installation permissions from startup validation.
+pub async fn permissions(State(state): State<Arc<ServerState>>) -> Response {
+    match state.startup_report() {
+        Some(report) => Json(report).into_response(),
+        None => json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "GitHub App permissions are unavailable until startup validation succeeds",
+        ),
+    }
+}
+
 /// `GET /metrics` — Prometheus metrics.
 pub async fn metrics_handler(State(state): State<Arc<ServerState>>) -> Response {
     state.metrics.update_process_metrics();

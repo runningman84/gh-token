@@ -124,8 +124,8 @@ serviceMonitor:
 # reach out to.
 cilium:
   enabled: false
-  # Client pods that may call the token endpoint.
-  clients:
-    - namespace: hermes
-      labels:
-        app.kubernetes.io/name: hermes
+  # Example client pods that may call the token endpoint:
+  # clients:
+  #   - namespace: hermes
+  #     labels:
+  #       app.kubernetes.io/name: hermes

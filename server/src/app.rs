@@ -99,6 +99,8 @@ pub struct ServerState {
     startup_ok: Arc<AtomicBool>,
     /// The last startup-validation error, if any.
     startup_error: Arc<std::sync::Mutex<Option<String>>>,
+    /// Metadata established by the successful startup validation.
+    startup_report: Arc<std::sync::Mutex<Option<StartupReport>>>,
 }
 
 impl ServerState {
@@ -154,6 +156,18 @@ impl ServerState {
         self.startup_error.lock().ok().and_then(|g| g.clone())
     }
 
+    /// The startup metadata, when credential validation has passed.
+    pub fn startup_report(&self) -> Option<StartupReport> {
+        self.startup_report.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// Stores metadata from a successful startup credential validation.
+    pub fn set_startup_report(&self, report: StartupReport) {
+        if let Ok(mut g) = self.startup_report.lock() {
+            *g = Some(report);
+        }
+    }
+
     /// Marks the startup credential validation as passed.
     pub fn mark_startup_ok(&self) {
         self.startup_ok.store(true, Ordering::Relaxed);
@@ -166,6 +180,9 @@ impl ServerState {
     /// Marks the startup credential validation as failed.
     pub fn mark_startup_failed(&self, err: &str) {
         self.startup_ok.store(false, Ordering::Relaxed);
+        if let Ok(mut g) = self.startup_report.lock() {
+            *g = None;
+        }
         if let Ok(mut g) = self.startup_error.lock() {
             *g = Some(err.to_string());
         }
@@ -183,7 +200,7 @@ pub(crate) fn record_gh_error(metrics: &Metrics, operation: &str, err: &GithubEr
 }
 
 /// Result of the startup credential validation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct StartupReport {
     pub app_id: u64,
     pub app_name: String,
@@ -227,6 +244,7 @@ impl Server {
             probe_token: Arc::new(tokio::sync::Mutex::new(None)),
             startup_ok: Arc::new(AtomicBool::new(false)),
             startup_error: Arc::new(std::sync::Mutex::new(None)),
+            startup_report: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
@@ -358,6 +376,7 @@ fn router(state: Arc<ServerState>) -> Router {
         .route("/", get(http::root))
         .route("/health", get(http::health))
         .route("/ready", get(http::ready))
+        .route("/permissions", get(http::permissions))
         .route("/metrics", get(http::metrics_handler))
         .route("/token", get(http::token).post(http::token))
         .with_state(state)
@@ -425,6 +444,7 @@ pub async fn startup_retry_loop(state: Arc<ServerState>, stop: CancellationToken
         }
         match Server::validate_startup(&state).await {
             Ok(report) => {
+                state.set_startup_report(report.clone());
                 state.mark_startup_ok();
                 info!(
                     app_id = report.app_id,

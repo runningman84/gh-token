@@ -47,9 +47,10 @@ async fn start_full_stack() -> FullStack {
         log_json: false,
     };
     let state = Server::state(config);
-    Server::validate_startup(&state)
+    let startup_report = Server::validate_startup(&state)
         .await
         .expect("startup validation");
+    state.set_startup_report(startup_report);
     state.mark_startup_ok();
     let server = Server::start(state).await.expect("server start");
     FullStack {
@@ -157,6 +158,19 @@ async fn client_retries_transient_failures() {
     assert_eq!(service.hits(), 3, "two failures + one success");
 
     service.shutdown().await;
+}
+
+#[tokio::test]
+async fn client_displays_github_permissions() {
+    let stack = start_full_stack().await;
+
+    let (code, stdout, stderr) = run_client(&["--url", &stack.base, "permissions"]).await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("JSON permissions report");
+    assert_eq!(report["app_permissions"]["contents"], "write");
+    assert_eq!(report["installation_permissions"]["pull_requests"], "write");
+    assert_eq!(report["repository_selection"], "all");
 }
 
 #[tokio::test]

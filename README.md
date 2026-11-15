@@ -41,6 +41,8 @@ background), and lets clients request shorter effective lifetimes.
   - `GET /ready` — readiness: 200 only if the startup credential check
     passed **and** the last GitHub reachability probe succeeded
     (otherwise 503, with `startup_check` / `startup_error` in the body)
+  - `GET /permissions` — app-declared and installation-effective GitHub
+    permissions (503 until startup validation succeeds)
   - `GET /metrics` — Prometheus metrics (requests, latency, issued/renewed/
     cached tokens, GitHub errors, active tokens, rate-limit rejections,
     GitHub rate-limit responses, cooldown, plus standard unprefixed
@@ -71,6 +73,7 @@ background), and lets clients request shorter effective lifetimes.
 - **Client** (`gh-token` binary)
   - `gh-token [--client NAME] [--refresh] [--ttl SECS] [--purpose TEXT]` → token on stdout
   - `gh-token health` → liveness/readiness check
+  - `gh-token permissions` → pretty-printed JSON with app and installation permissions
   - Retries transient failures (429/5xx/network) with backoff, honoring
     `Retry-After`
   - Defaults to the in-cluster service URL when `KUBERNETES_SERVICE_HOST` is
@@ -83,6 +86,15 @@ background), and lets clients request shorter effective lifetimes.
   - Helm chart to `oci://ghcr.io/runningman84/charts/gh-token`
 
 ## Server API
+
+### `GET /permissions`
+
+Returns the permissions declared by the GitHub App (`app_permissions`) and
+those effectively granted to this installation (`installation_permissions`),
+along with app/installation IDs and repository selection. These values come
+from GitHub's `GET /app` and `GET /app/installations/{installation_id}` APIs.
+The endpoint returns 503 until startup credential validation succeeds. Run
+`gh-token permissions` to display the report as formatted JSON.
 
 ### `GET /token`
 
