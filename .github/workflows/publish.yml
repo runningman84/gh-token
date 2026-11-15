@@ -174,9 +174,7 @@ jobs:
               -o "spdx-json=sbom-v${VERSION}-${ARCH}.spdx.json" \
               -o "cyclonedx-json=sbom-v${VERSION}-${ARCH}.cdx.json"
           done
-          mkdir -p assets
-          mv sbom-*.json assets/
-          ls -la assets/
+          ls -la sbom-*.json
 
       - name: Install Grype
         run: |
@@ -188,16 +186,28 @@ jobs:
           VERSION="${{ inputs.version }}"
           IMG="${IMAGE_NAME}:v${VERSION}"
           for ARCH in amd64 arm64; do
-            grype "$IMG" --platform "linux/${ARCH}" -o table > "assets/grype-v${VERSION}-${ARCH}.txt" || true
-            grype "$IMG" --platform "linux/${ARCH}" -o json > "assets/grype-v${VERSION}-${ARCH}.json" || true
-            grype "$IMG" --platform "linux/${ARCH}" -o sarif > "assets/grype-v${VERSION}-${ARCH}.sarif" || true
+            grype "$IMG" --platform "linux/${ARCH}" -o table > "grype-v${VERSION}-${ARCH}.txt" || true
+            grype "$IMG" --platform "linux/${ARCH}" -o json > "grype-v${VERSION}-${ARCH}.json" || true
+            grype "$IMG" --platform "linux/${ARCH}" -o sarif > "grype-v${VERSION}-${ARCH}.sarif" || true
           done
-          ls -la assets/
+          ls -la grype-*
 
       - name: Upload scan assets to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "v${{ inputs.version }}" assets/* --clobber
+        run: |
+          echo "Working dir: $(pwd)"
+          ls -la
+          count=0
+          for f in sbom-*.json grype-*.txt grype-*.json grype-*.sarif; do
+            [ -e "$f" ] || continue
+            if gh release upload "v${{ inputs.version }}" "$f" --clobber; then
+              count=$((count+1))
+            else
+              echo "WARN: failed to upload $f"
+            fi
+          done
+          echo "Uploaded $count file(s)"
 
   chart:
     name: Helm chart (OCI)
