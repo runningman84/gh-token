@@ -14,6 +14,8 @@ use tracing::debug;
 pub struct TokenRecord {
     /// The GitHub installation token (masked in all logs).
     pub token: String,
+    /// The purpose this token was requested for (advisory metadata).
+    pub purpose: Option<String>,
     /// The TTL (in seconds) this token was issued with.
     pub ttl: u64,
     pub issued_at: DateTime<Utc>,
@@ -26,12 +28,17 @@ pub struct TokenRecord {
 }
 
 impl TokenRecord {
-    pub fn new(token: String, ttl: u64, github_expires_at: DateTime<Utc>) -> Self {
+    pub fn new(
+        token: String,
+        ttl: u64,
+        github_expires_at: DateTime<Utc>,
+        purpose: Option<String>,
+    ) -> Self {
         let now = Utc::now();
-        let soft_expires_at =
-            (now + chrono::Duration::seconds(ttl as i64)).min(github_expires_at);
+        let soft_expires_at = (now + chrono::Duration::seconds(ttl as i64)).min(github_expires_at);
         Self {
             token,
+            purpose,
             ttl,
             issued_at: now,
             soft_expires_at,
@@ -75,10 +82,7 @@ impl TokenStore {
 
     pub async fn put(&self, client: &str, record: TokenRecord) {
         debug!(client, "storing token record");
-        self.inner
-            .lock()
-            .await
-            .insert(client.to_string(), record);
+        self.inner.lock().await.insert(client.to_string(), record);
     }
 
     /// Marks a token as used (keeps it from being dropped by the watcher).

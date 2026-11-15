@@ -43,6 +43,15 @@ service:
   port: 8080
 
 probes:
+  # Gates liveness/readiness: the pod is considered started only once the
+  # startup credential check and a reachability probe both succeeded.
+  # 20 x 5s = up to 100s, which also covers a first startup-check failure
+  # (background retry fires at ~30s).
+  startup:
+    path: /ready
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 20
   liveness:
     path: /health
     initialDelaySeconds: 2
@@ -81,6 +90,11 @@ containerSecurityContext:
 
 # Extra configuration, passed through as environment variables.
 # See the server documentation for all GHTS_* options.
+# For per-client keys, prefer secret.data (keeps the keys out of the release
+# manifest); e.g. add GHTS_CLIENT_KEYS='{"hermes":"…"}' to the secret, or set
+# env.GHTS_CLIENT_KEYS below.
+# To make the token purpose part of the cache key (differing purpose =>
+# fresh token), set env.GHTS_PURPOSE_KEY: "true" (advisory-only by default).
 env:
   GHTS_BIND: "0.0.0.0:8080"
   GHTS_TOKEN_TTL: "3600"
@@ -92,6 +106,8 @@ env:
   GHTS_READY_MAX_AGE: "90"
   GHTS_RATE_MAX: "30"
   GHTS_RATE_WINDOW: "60"
+  GHTS_BACKOFF_BASE_SECS: "2"
+  GHTS_BACKOFF_MAX_SECS: "300"
   GHTS_LOG: "info"
   GHTS_LOG_JSON: "true"
 

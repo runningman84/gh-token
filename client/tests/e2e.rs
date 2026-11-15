@@ -7,7 +7,7 @@ use std::time::Duration;
 use gh_token_server::app::Server;
 use gh_token_server::config::Config;
 use gh_token_testutil::{
-    MockGitHub, MockTokenService, MOCK_APP_ID, MOCK_INSTALLATION_ID, TEST_PRIVATE_KEY_PEM,
+    MOCK_APP_ID, MOCK_INSTALLATION_ID, MockGitHub, MockTokenService, TEST_PRIVATE_KEY_PEM,
     mock_token,
 };
 use tokio::time::sleep;
@@ -31,6 +31,8 @@ async fn start_full_stack() -> FullStack {
         github_base_url: mock.base_url(),
         bind: "127.0.0.1:0".parse().unwrap(),
         api_key: None,
+        client_keys: std::collections::HashMap::new(),
+        purpose_key: false,
         token_ttl: 3600,
         min_ttl: 60,
         renew_before: Duration::from_secs(300),
@@ -40,10 +42,15 @@ async fn start_full_stack() -> FullStack {
         ready_max_age: Duration::from_secs(90),
         rate_max: 30,
         rate_window: Duration::from_secs(60),
+        backoff_base: Duration::from_secs(1),
+        backoff_max: Duration::from_secs(8),
         log_json: false,
     };
-    let state = Server::new(config);
-    Server::validate_startup(&state).await.expect("startup validation");
+    let state = Server::state(config);
+    Server::validate_startup(&state)
+        .await
+        .expect("startup validation");
+    state.mark_startup_ok();
     let server = Server::start(state).await.expect("server start");
     FullStack {
         base: format!("http://{}", server.local_addr()),
@@ -58,6 +65,7 @@ async fn run_client(args: &[&str]) -> (i32, String, String) {
         .env_remove("GHTS_URL")
         .env_remove("GHTS_CLIENT")
         .env_remove("GHTS_API_KEY")
+        .env_remove("GHTS_PURPOSE")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -74,17 +82,14 @@ async fn run_client(args: &[&str]) -> (i32, String, String) {
 async fn client_fetches_token_from_full_stack() {
     let stack = start_full_stack().await;
 
-    let (code, stdout, stderr) = run_client(&[
-        "--url",
-        &stack.base,
-        "--client",
-        "hermes",
-    ])
-    .await;
+    let (code, stdout, stderr) = run_client(&["--url", &stack.base, "--client", "hermes"]).await;
     assert_eq!(code, 0, "stderr: {stderr}");
 
     let token = stdout.trim();
-    assert!(token.starts_with("ghs_mock"), "stdout should be the token, got {stdout:?}");
+    assert!(
+        token.starts_with("ghs_mock"),
+        "stdout should be the token, got {stdout:?}"
+    );
     assert_eq!(stdout.lines().count(), 1, "exactly one line on stdout");
 
     // The full token must never appear on stderr (only masked form).
@@ -118,14 +123,8 @@ async fn client_refresh_gets_new_token() {
     let stack = start_full_stack().await;
 
     let (_, stdout1, _) = run_client(&["--url", &stack.base, "--client", "hermes"]).await;
-    let (code, stdout2, stderr) = run_client(&[
-        "--url",
-        &stack.base,
-        "--client",
-        "hermes",
-        "--refresh",
-    ])
-    .await;
+    let (code, stdout2, stderr) =
+        run_client(&["--url", &stack.base, "--client", "hermes", "--refresh"]).await;
     assert_eq!(code, 0, "stderr: {stderr}");
     assert_ne!(
         stdout1.trim(),
@@ -150,7 +149,10 @@ async fn client_retries_transient_failures() {
         "5",
     ])
     .await;
-    assert_eq!(code, 0, "client should retry past the 2 failures; stderr: {stderr}");
+    assert_eq!(
+        code, 0,
+        "client should retry past the 2 failures; stderr: {stderr}"
+    );
     assert_eq!(stdout.trim(), token);
     assert_eq!(service.hits(), 3, "two failures + one success");
 
@@ -168,21 +170,62 @@ async fn client_health_command() {
 }
 
 #[tokio::test]
+async fn client_purpose_and_client_key() {
+    let token = mock_token();
+    let mut service = MockTokenService::start(&token, 0, None)
+        .await
+        .with_client_keys([("hermes".to_string(), "hermes-key".to_string())]);
+
+    // Keyed client without the key: rejected.
+    let (code, _stdout, stderr) =
+        run_client(&["--url", &service.base_url(), "--client", "hermes"]).await;
+    assert_ne!(code, 0, "should fail without client key; stderr: {stderr}");
+
+    // Wrong key: rejected.
+    let (code, _stdout, stderr) = run_client(&[
+        "--url",
+        &service.base_url(),
+        "--client",
+        "hermes",
+        "--api-key",
+        "wrong",
+    ])
+    .await;
+    assert_ne!(
+        code, 0,
+        "should fail with wrong client key; stderr: {stderr}"
+    );
+
+    // Right key + purpose: success, token on stdout.
+    let (code, stdout, stderr) = run_client(&[
+        "--url",
+        &service.base_url(),
+        "--client",
+        "hermes",
+        "--api-key",
+        "hermes-key",
+        "--purpose",
+        "triage of open issues in project abc",
+    ])
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout.trim(), token);
+
+    service.shutdown().await;
+}
+
+#[tokio::test]
 async fn client_sends_api_key() {
-    let mut service = MockTokenService::start(&mock_token(), 0, Some("topsecret".to_string())).await;
+    let mut service =
+        MockTokenService::start(&mock_token(), 0, Some("topsecret".to_string())).await;
 
     // Without the key: 401 -> non-zero exit.
     let (code, _stdout, stderr) = run_client(&["--url", &service.base_url()]).await;
     assert_ne!(code, 0, "should fail without API key; stderr: {stderr}");
 
     // With the key: success.
-    let (code, stdout, stderr) = run_client(&[
-        "--url",
-        &service.base_url(),
-        "--api-key",
-        "topsecret",
-    ])
-    .await;
+    let (code, stdout, stderr) =
+        run_client(&["--url", &service.base_url(), "--api-key", "topsecret"]).await;
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(stdout.trim().starts_with("ghs_"));
 

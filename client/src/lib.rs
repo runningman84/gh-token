@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use reqwest::Client;
 use tokio::time::sleep;
@@ -62,6 +62,11 @@ pub struct Cli {
     /// Requested effective TTL in seconds.
     #[arg(long, global = true, value_name = "SECS")]
     pub ttl: Option<u64>,
+
+    /// Free-form purpose for this token (advisory audit metadata, max 256
+    /// chars), e.g. "triage of open issues in project abc".
+    #[arg(long, env = "GHTS_PURPOSE", global = true, value_name = "PURPOSE")]
+    pub purpose: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -123,15 +128,13 @@ pub async fn run(cli: &Cli) -> Result<()> {
             if let Some(ttl) = ttl {
                 params.push(("ttl", ttl.to_string()));
             }
+            if let Some(ref purpose) = cli.purpose {
+                params.push(("purpose", purpose.clone()));
+            }
 
-            let resp = get_token_with_retries(
-                &client,
-                &base_url,
-                &params,
-                &cli.api_key,
-                cli.retries,
-            )
-            .await?;
+            let resp =
+                get_token_with_retries(&client, &base_url, &params, &cli.api_key, cli.retries)
+                    .await?;
 
             info!(
                 client = %name,
@@ -252,4 +255,3 @@ fn init_logging() {
         .with_target(false)
         .try_init();
 }
-

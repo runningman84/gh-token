@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 pub const TOKEN_REQ_BUCKETS: &[f64] = &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
 
+pub const GITHUB_REQ_BUCKETS: &[f64] = &[0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0];
+
 /// All Prometheus metrics exposed by the server.
 #[derive(Debug)]
 pub struct Metrics {
@@ -18,10 +20,15 @@ pub struct Metrics {
     tokens_served_cached: IntCounter,
     tokens_expired: IntCounter,
     github_api_errors: IntCounterVec,
+    github_rate_limited: IntCounterVec,
+    github_cooldown_seconds: IntGauge,
     active_tokens: IntGauge,
     token_lifetime: Histogram,
     rate_limit_rejections: IntCounter,
     github_reachable: IntGauge,
+    startup_check_ok: IntGauge,
+    github_requests: IntCounterVec,
+    github_request_duration: prometheus::HistogramVec,
 }
 
 impl Metrics {
@@ -29,7 +36,10 @@ impl Metrics {
         let registry = Registry::new();
 
         let token_requests = IntCounterVec::new(
-            Opts::new("ghts_token_requests_total", "Token requests by client and status."),
+            Opts::new(
+                "ghts_token_requests_total",
+                "Token requests by client and status.",
+            ),
             &["client", "status"],
         )
         .expect("valid metric");
@@ -69,8 +79,26 @@ impl Metrics {
         .expect("valid metric");
 
         let github_api_errors = IntCounterVec::new(
-            Opts::new("ghts_github_api_errors_total", "GitHub API errors by operation."),
+            Opts::new(
+                "ghts_github_api_errors_total",
+                "GitHub API errors by operation.",
+            ),
             &["operation"],
+        )
+        .expect("valid metric");
+
+        let github_rate_limited = IntCounterVec::new(
+            Opts::new(
+                "ghts_github_rate_limited_total",
+                "GitHub rate-limit responses by operation.",
+            ),
+            &["operation"],
+        )
+        .expect("valid metric");
+
+        let github_cooldown_seconds = IntGauge::new(
+            "ghts_github_cooldown_seconds",
+            "Remaining seconds of the GitHub rate-limit backoff cooldown (0 = none).",
         )
         .expect("valid metric");
 
@@ -101,6 +129,32 @@ impl Metrics {
         )
         .expect("valid metric");
 
+        let startup_check_ok = IntGauge::new(
+            "ghts_startup_check_ok",
+            "1 if the startup credential validation passed (0 = never or last attempt failed).",
+        )
+        .expect("valid metric");
+
+        let github_requests = IntCounterVec::new(
+            Opts::new(
+                "ghts_github_requests_total",
+                "Requests made to the GitHub API by path (normalized) and status. \
+                 status is the HTTP code, or \"err\" for transport failures.",
+            ),
+            &["path", "status"],
+        )
+        .expect("valid metric");
+
+        let github_request_duration = prometheus::HistogramVec::new(
+            HistogramOpts::new(
+                "ghts_github_request_duration_seconds",
+                "Duration of requests made to the GitHub API by path (normalized).",
+            )
+            .buckets(GITHUB_REQ_BUCKETS.to_vec()),
+            &["path"],
+        )
+        .expect("valid metric");
+
         for m in [
             Box::new(token_requests.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(token_request_duration.clone()) as Box<dyn prometheus::core::Collector>,
@@ -109,10 +163,15 @@ impl Metrics {
             Box::new(tokens_served_cached.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(tokens_expired.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(github_api_errors.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(github_rate_limited.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(github_cooldown_seconds.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(active_tokens.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(token_lifetime.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(rate_limit_rejections.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(github_reachable.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(startup_check_ok.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(github_requests.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(github_request_duration.clone()) as Box<dyn prometheus::core::Collector>,
         ] {
             registry.register(m).expect("metric registration");
         }
@@ -126,15 +185,22 @@ impl Metrics {
             tokens_served_cached,
             tokens_expired,
             github_api_errors,
+            github_rate_limited,
+            github_cooldown_seconds,
             active_tokens,
             token_lifetime,
             rate_limit_rejections,
             github_reachable,
+            startup_check_ok,
+            github_requests,
+            github_request_duration,
         })
     }
 
     pub fn token_request(&self, client: &str, status: &str) {
-        self.token_requests.with_label_values(&[client, status]).inc();
+        self.token_requests
+            .with_label_values(&[client, status])
+            .inc();
     }
 
     pub fn token_request_duration(&self, client: &str, secs: f64) {
@@ -163,6 +229,17 @@ impl Metrics {
         self.github_api_errors.with_label_values(&[operation]).inc();
     }
 
+    pub fn github_rate_limited(&self, operation: &str) {
+        self.github_rate_limited
+            .with_label_values(&[operation])
+            .inc();
+    }
+
+    pub fn set_github_cooldown(&self, remaining: Option<u64>) {
+        self.github_cooldown_seconds
+            .set(remaining.unwrap_or(0) as i64);
+    }
+
     pub fn set_active_tokens(&self, count: usize) {
         self.active_tokens.set(count as i64);
     }
@@ -179,6 +256,20 @@ impl Metrics {
 
     pub fn set_github_reachable(&self, reachable: bool) {
         self.github_reachable.set(if reachable { 1 } else { 0 });
+    }
+
+    pub fn set_startup_check_ok(&self, ok: bool) {
+        self.startup_check_ok.set(if ok { 1 } else { 0 });
+    }
+
+    /// Records one request to the GitHub API (count + duration).
+    pub fn github_request(&self, path: &str, status: &str, secs: f64) {
+        self.github_requests
+            .with_label_values(&[path, status])
+            .inc();
+        self.github_request_duration
+            .with_label_values(&[path])
+            .observe(secs);
     }
 
     /// Encodes all metrics in Prometheus text exposition format.

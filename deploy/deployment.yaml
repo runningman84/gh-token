@@ -53,6 +53,15 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # Gates liveness/readiness until the startup credential check and
+          # a reachability probe both succeeded (up to 20 x 5s = 100s).
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 20
           livenessProbe:
             httpGet:
               path: /health

@@ -5,8 +5,8 @@ use std::time::Duration;
 use gh_token_server::app::{Server, StartupReport};
 use gh_token_server::config::Config;
 use gh_token_testutil::{
-    MockGitHub, MOCK_APP_ID, MOCK_APP_NAME, MOCK_BOT_LOGIN, MOCK_INSTALLATION_ID,
-    TEST_APP_KEY_B64, TEST_PRIVATE_KEY_PEM,
+    MOCK_APP_ID, MOCK_APP_NAME, MOCK_BOT_LOGIN, MOCK_INSTALLATION_ID, MockGitHub, TEST_APP_KEY_B64,
+    TEST_PRIVATE_KEY_PEM,
 };
 use tokio::time::sleep;
 
@@ -18,6 +18,8 @@ fn base_config(github_base_url: String) -> Config {
         github_base_url,
         bind: "127.0.0.1:0".parse().unwrap(),
         api_key: None,
+        client_keys: std::collections::HashMap::new(),
+        purpose_key: false,
         token_ttl: 3600,
         min_ttl: 60,
         renew_before: Duration::from_secs(300),
@@ -27,13 +29,15 @@ fn base_config(github_base_url: String) -> Config {
         ready_max_age: Duration::from_secs(90),
         rate_max: 30,
         rate_window: Duration::from_secs(60),
+        backoff_base: Duration::from_secs(1),
+        backoff_max: Duration::from_secs(8),
         log_json: false,
     }
 }
 
 async fn validate(github_base_url: String) -> Result<StartupReport, String> {
     let config = base_config(github_base_url);
-    let state = Server::new(config);
+    let state = Server::state(config);
     Server::validate_startup(&state).await
 }
 
@@ -64,7 +68,7 @@ async fn startup_fails_on_wrong_app_id() {
             app_id: 9999999,
             ..config
         };
-        let state = Server::new(config);
+        let state = Server::state(config);
         Server::validate_startup(&state).await.unwrap_err()
     };
     assert!(
@@ -104,9 +108,17 @@ async fn startup_fails_when_token_creation_fails() {
 }
 
 /// Spawns the real `gh-token-server` binary with env pointing at a dead
-/// GitHub endpoint; it must exit with status 1 (crash on bad credentials).
+/// GitHub endpoint; the server keeps serving, and `/ready` must report the
+/// failed startup check (503) instead of the process exiting.
 #[tokio::test]
-async fn binary_crashes_when_credentials_are_invalid() {
+async fn binary_reports_not_ready_when_credentials_are_invalid() {
+    // Find a free port for the server to bind.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_gh-token-server"))
         .env_clear()
         .env("GH_APP_ID", MOCK_APP_ID.to_string())
@@ -114,18 +126,46 @@ async fn binary_crashes_when_credentials_are_invalid() {
         .env("GH_APP_KEY_B64", TEST_APP_KEY_B64)
         // Nothing listens on this port -> startup validation must fail.
         .env("GHTS_GITHUB_BASE_URL", "http://127.0.0.1:1")
+        .env("GHTS_BIND", format!("127.0.0.1:{port}"))
         .env("GHTS_LOG", "error")
+        .env("GHTS_PROBE_INTERVAL", "1")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn gh-token-server");
 
-    let status = child.wait().await.expect("wait for server");
-    assert_eq!(
-        status.code(),
-        Some(1),
-        "server should exit with status 1 on invalid credentials"
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{port}");
+
+    let mut ready_body = None;
+    for _ in 0..100 {
+        sleep(Duration::from_millis(100)).await;
+        if let Ok(resp) = client.get(format!("{base}/ready")).send().await
+            && resp.status().as_u16() == 503
+        {
+            ready_body = Some(resp.json::<serde_json::Value>().await.unwrap());
+            break;
+        }
+    }
+    let body = ready_body.expect("/ready should answer 503");
+    assert_eq!(body["status"], "not_ready");
+    assert_eq!(body["startup_check"], "failed");
+    assert!(
+        body["startup_error"].is_string(),
+        "startup_error should explain the failure: {body}"
     );
+
+    // The server keeps running (it retries the startup check in the
+    // background), so /health still answers.
+    let resp = client
+        .get(format!("{base}/health"))
+        .send()
+        .await
+        .expect("server should still be running");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    child.kill().await.expect("kill server");
+    let _ = child.wait().await;
 }
 
 /// Spawns the real binary against the mock GitHub; it must validate and
@@ -158,31 +198,37 @@ async fn binary_serves_health_after_startup_validation() {
     let client = reqwest::Client::new();
     let base = format!("http://127.0.0.1:{port}");
 
-    // /health appears only after startup validation passed.
+    // /health appears once the server starts serving.
     let mut health_ok = false;
     for _ in 0..100 {
         sleep(Duration::from_millis(100)).await;
-        if let Ok(resp) = client.get(format!("{base}/health")).send().await {
-            if resp.status().is_success() {
-                health_ok = true;
-                break;
-            }
+        if let Ok(resp) = client.get(format!("{base}/health")).send().await
+            && resp.status().is_success()
+        {
+            health_ok = true;
+            break;
         }
     }
-    assert!(health_ok, "server should serve /health after startup validation");
+    assert!(
+        health_ok,
+        "server should serve /health after startup validation"
+    );
 
     // /ready becomes ready once a probe succeeds (1s probe interval).
     let mut ready_ok = false;
     for _ in 0..30 {
         sleep(Duration::from_millis(500)).await;
-        if let Ok(resp) = client.get(format!("{base}/ready")).send().await {
-            if resp.status().as_u16() == 200 {
-                ready_ok = true;
-                break;
-            }
+        if let Ok(resp) = client.get(format!("{base}/ready")).send().await
+            && resp.status().as_u16() == 200
+        {
+            ready_ok = true;
+            break;
         }
     }
-    assert!(ready_ok, "server should report ready against the mock GitHub");
+    assert!(
+        ready_ok,
+        "server should report ready against the mock GitHub"
+    );
 
     child.kill().await.expect("kill server");
     let _ = child.wait().await;

@@ -35,21 +35,40 @@ background), and lets clients request shorter effective lifetimes.
 ## Features
 
 - **Server** (Rust, `axum` + `tokio`)
-  - `GET/POST /token?client=<id>&refresh=<bool>&ttl=<secs>` — issues or serves
-    the cached installation token for a client
+  - `GET/POST /token?client=<id>&refresh=<bool>&ttl=<secs>&purpose=<text>` —
+    issues or serves the cached installation token for a client
   - `GET /health` — liveness
-  - `GET /ready` — readiness (200 only while the GitHub API is reachable)
+  - `GET /ready` — readiness: 200 only if the startup credential check
+    passed **and** the last GitHub reachability probe succeeded
+    (otherwise 503, with `startup_check` / `startup_error` in the body)
   - `GET /metrics` — Prometheus metrics (requests, latency, issued/renewed/
-    cached tokens, GitHub errors, active tokens, rate-limit rejections)
+    cached tokens, GitHub errors, active tokens, rate-limit rejections,
+    GitHub rate-limit responses, cooldown)
   - Per-client sliding-window rate limiting (429 + `Retry-After`)
+  - **GitHub rate-limit awareness**: detects 429 / 403 rate-limit responses
+    (primary limit, secondary/abuse limits), backs off exponentially, and
+    suppresses further GitHub calls for the cooldown period. While GitHub is
+    rate-limited, `/token` answers `503` + `Retry-After` (clients retry)
+    instead of hammering the API
   - Background **watcher** renews expiring tokens for active clients
-  - Background **probe** for the readiness state
-  - **Startup validation**: fails fast (exit 1) when the credentials are
-    invalid, and logs the established auth level (app, installation,
-    permissions, repository selection, bot login)
-  - Tokens are only ever logged in masked form: `ghs_abc1…wxyz (len 86)`
+  - Background **probe** for the readiness state. The probe calls
+    `GET /rate_limit` with a cached installation token, so it uses the
+    installation's rate-limit budget instead of the shared 60/h
+    unauthenticated per-IP budget (and also verifies the credentials keep
+    working)
+  - **Startup validation**: validates the GitHub App credentials at boot
+    and logs the established auth level (app, installation, permissions,
+    repository selection, bot login). Until it passes, `/ready` returns
+    503 (`startup_check: "failed"`); a failed check is retried in the
+    background with exponential backoff (30s .. 300s), so a transient
+    outage at boot recovers without a pod restart
+  - **Logs every GitHub request/response** (method, path, auth kind, status,
+    duration, truncated body)
+  - Tokens are only ever logged in masked form: `ghs_abc1…wxyz (len 86)` —
+    the request logger also scrubs any `ghs_`/`ghp_`/… token that appears in
+    a response body
 - **Client** (`gh-token` binary)
-  - `gh-token [--client NAME] [--refresh] [--ttl SECS]` → token on stdout
+  - `gh-token [--client NAME] [--refresh] [--ttl SECS] [--purpose TEXT]` → token on stdout
   - `gh-token health` → liveness/readiness check
   - Retries transient failures (429/5xx/network) with backoff, honoring
     `Retry-After`
@@ -71,6 +90,7 @@ background), and lets clients request shorter effective lifetimes.
 | `client`  | **required.** Identifier, `[a-z0-9_-]{1,64}` (pod names work out of the box) |
 | `refresh` | `true` → ignore the cache and force a fresh token from GitHub               |
 | `ttl`     | Requested effective TTL in seconds (clamped to `GHTS_MIN_TTL`…`GHTS_TOKEN_TTL`) |
+| `purpose` | Optional free-form audit metadata, 1–256 chars, no control characters (e.g. `triage of open issues in project abc`). Returned in the response, included in issue/renewal logs. By default purely advisory: the cached token is served regardless of purpose and no extra GitHub token is created. With `GHTS_PURPOSE_KEY=true` the purpose becomes part of the cache key and a differing purpose issues a fresh token. |
 
 Response:
 
@@ -82,18 +102,33 @@ Response:
   "ttl": 3540,
   "github_expires_at": "2026-01-01T01:00:00Z",
   "cached": false,
-  "renewed": true
+  "renewed": true,
+  "purpose": "triage of open issues in project abc"
 }
 ```
 
 `expires_at`/`ttl` are the *server-enforced* lifetime (possibly shorter than
 the underlying GitHub token, which always expires after one hour — see
-`github_expires_at`).
+`github_expires_at`). `purpose` is omitted when not requested.
 
 ### Authentication (optional)
 
 When `GHTS_API_KEY` is set, requests must present the key as
 `X-GH-Token-Key: <key>` or `Authorization: Bearer <key>`.
+
+#### Per-client keys
+
+`GHTS_CLIENT_KEYS` is a JSON object mapping client ids to keys:
+
+```sh
+GHTS_CLIENT_KEYS='{"hermes":"hermes-key","pi":"pi-key"}'
+```
+
+A request for a client **present in the map** must send the matching key via
+the same `X-GH-Token-Key` / `Authorization: Bearer` header (401
+`missing`/`invalid API key for this client` otherwise). Clients absent from
+the map are unaffected, and `GHTS_API_KEY` (when set) still applies on top.
+The client binary sends `--api-key` for both checks.
 
 ## Configuration (environment)
 
@@ -104,6 +139,8 @@ When `GHTS_API_KEY` is set, requests must present the key as
 | `GH_APP_KEY_B64`          | — (required)               | RSA private key, base64-encoded PEM (raw PEM also accepted) |
 | `GHTS_BIND`               | `0.0.0.0:8080`             | Listen address |
 | `GHTS_API_KEY`            | *(unset = no auth)*        | Optional shared API key |
+| `GHTS_CLIENT_KEYS`        | *(unset = off)*            | JSON object of per-client keys, e.g. `{"hermes":"…"}`; only listed clients are gated |
+| `GHTS_PURPOSE_KEY`        | `false`                    | When true, the token purpose is part of the cache key (differing purpose ⇒ fresh token); off by default (advisory only) |
 | `GHTS_TOKEN_TTL`          | `3600`                     | Default soft TTL in seconds (max 3600) |
 | `GHTS_MIN_TTL`            | `60`                       | Smallest requestable soft TTL |
 | `GHTS_RENEW_BEFORE`       | `300`                      | Renew when less than this much (soft) lifetime remains |
@@ -113,6 +150,8 @@ When `GHTS_API_KEY` is set, requests must present the key as
 | `GHTS_READY_MAX_AGE`      | `90`                       | `/ready` is ready only if the last probe succeeded within this age |
 | `GHTS_RATE_MAX`           | `30`                       | Max token requests per client per window |
 | `GHTS_RATE_WINDOW`        | `60`                       | Rate-limit window (seconds) |
+| `GHTS_BACKOFF_BASE_SECS`  | `2`                        | Base delay for the GitHub rate-limit backoff (doubles per consecutive limit, capped at `GHTS_BACKOFF_MAX_SECS`) |
+| `GHTS_BACKOFF_MAX_SECS`   | `300`                      | Maximum GitHub rate-limit cooldown (seconds) |
 | `GHTS_GITHUB_BASE_URL`    | `https://api.github.com`   | GitHub API base URL (GHE / tests) |
 | `GHTS_LOG` / `RUST_LOG`   | `info`                     | Log level / filter |
 | `GHTS_LOG_JSON`           | `false`                    | JSON log format |
@@ -184,6 +223,10 @@ gh-token --url http://gh-token.gh-token.svc.cluster.local:8080 \
 # Force a fresh token:
 gh-token --client pi --refresh
 
+# Attach a purpose (audit metadata) and, when required, the client key:
+gh-token --client hermes --api-key "***" \
+  --purpose "triage of open issues in project abc"
+
 # Check the server:
 gh-token health
 
@@ -191,7 +234,8 @@ gh-token health
 gh-token --client pi --api-key <key>
 ```
 
-Environment: `GHTS_URL`, `GHTS_CLIENT`, `GHTS_API_KEY` are honored.
+Environment: `GHTS_URL`, `GHTS_CLIENT`, `GHTS_API_KEY`, `GHTS_PURPOSE` are
+honored.
 
 Typical agent wiring:
 
@@ -211,10 +255,15 @@ gh pr view 42
 | `ghts_tokens_served_cached_total` | counter | Requests served from cache |
 | `ghts_tokens_expired_total` | counter | Expired tokens |
 | `ghts_github_api_errors_total{operation}` | counter | GitHub API errors |
+| `ghts_github_requests_total{path,status}` | counter | All requests to the GitHub API by normalized path (ids → `{id}`) and status (HTTP code, or `err` for transport failures) |
+| `ghts_github_request_duration_seconds{path}` | histogram | Duration of requests to the GitHub API |
+| `ghts_github_rate_limited_total{operation}` | counter | GitHub rate-limit responses (429/403) |
+| `ghts_github_cooldown_seconds` | gauge | Remaining seconds of the GitHub rate-limit cooldown |
 | `ghts_active_tokens` | gauge | Tracked tokens in the cache |
 | `ghts_token_lifetime_seconds` | histogram | Lifetime of issued tokens |
 | `ghts_rate_limit_rejections_total` | counter | Rate-limit rejections |
 | `ghts_github_reachable` | gauge | Last probe outcome (1/0) |
+| `ghts_startup_check_ok` | gauge | 1 if the startup credential validation passed |
 
 ## Development
 
@@ -227,11 +276,13 @@ cargo test --workspace
 The test suite includes a **mock GitHub API server** (`testutil/`) that
 verifies the app JWT signatures (RS256 against a generated test keypair),
 simulates `GET /app`, `GET /app/installations/{id}`,
-`POST /app/installations/{id}/access_tokens`, `GET /user` and
-`GET /rate_limit`, and can be toggled to fail per endpoint. Integration tests
+`POST /app/installations/{id}/access_tokens`, `GET /installation/repositories`,
+`GET /users/{login}` and `GET /rate_limit`, and can be toggled to fail per
+endpoint or to answer with rate-limit responses. Integration tests
 cover the token flow (issue/cache/refresh/rate-limit), the renewal watcher,
-readiness flapping, API-key enforcement, startup validation, and the client
-end-to-end (binary against the real server + mock GitHub).
+readiness flapping, API-key and per-client key enforcement, purpose handling
+(advisory by default and `GHTS_PURPOSE_KEY` isolation), startup validation,
+and the client end-to-end (binary against the real server + mock GitHub).
 
 Releases: follow [Conventional Commits](https://www.conventionalcommits.org/)
 (`feat:`, `fix:`, `perf:`, …; `!` or `BREAKING CHANGE:` for breaking

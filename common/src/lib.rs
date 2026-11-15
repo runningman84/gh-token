@@ -27,6 +27,30 @@ pub struct TokenResponse {
     pub cached: bool,
     /// Whether an existing token was renewed with a fresh GitHub token.
     pub renewed: bool,
+    /// The purpose this token was requested for (advisory metadata).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
+}
+
+/// Maximum length of a token request purpose.
+pub const MAX_PURPOSE_LEN: usize = 256;
+
+/// Validates a token request purpose: 1-256 chars, no control characters
+/// (so it stays safe as a single log line).
+pub fn validate_purpose(purpose: &str) -> Result<(), String> {
+    let len = purpose.chars().count();
+    if len == 0 {
+        return Err("purpose must not be empty".into());
+    }
+    if len > MAX_PURPOSE_LEN {
+        return Err(format!(
+            "purpose must be at most {MAX_PURPOSE_LEN} characters (got {len})"
+        ));
+    }
+    if purpose.chars().any(char::is_control) {
+        return Err("purpose must not contain control characters".into());
+    }
+    Ok(())
 }
 
 /// Validates a client identifier: lowercase alphanumerics, `_`, `-`, max 64 chars.
@@ -34,6 +58,11 @@ pub struct TokenResponse {
 /// This is the same character set Kubernetes uses for pod names, so any
 /// in-cluster workload can identify itself with its pod name.
 pub fn validate_client_id(client: &str) -> Result<(), String> {
+    if client.is_empty() {
+        return Err(
+            "invalid client identifier (expected 1-64 lowercase alphanumerics, '_' or '-')".into(),
+        );
+    }
     if !is_valid_client_id(client) {
         return Err(format!(
             "invalid client identifier {client:?} (expected lowercase alphanumerics, '_' or '-', max 64 chars)"
@@ -60,6 +89,46 @@ pub fn mask_token(token: &str) -> String {
     let head = &token[..8.min(token.len())];
     let tail = &token[token.len().saturating_sub(4)..];
     format!("{head}…{tail} (len {})", token.len())
+}
+
+/// GitHub token prefixes (installation tokens, PATs, fine-grained PATs).
+const GH_TOKEN_PREFIXES: [&str; 6] = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"];
+
+/// Masks GitHub tokens anywhere in a string, for safe logging.
+///
+/// `{"token":"ghs_5745…"}` -> `{"token":"ghs_5745… (len 383)"}`.
+/// Short strings after a prefix (e.g. prose like `ghs_x`) are left alone.
+pub fn mask_gh_tokens(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    loop {
+        let mut best: Option<(usize, &str)> = None;
+        for prefix in GH_TOKEN_PREFIXES {
+            if let Some(i) = rest.find(prefix)
+                && best.is_none_or(|(bi, _)| i < bi)
+            {
+                best = Some((i, prefix));
+            }
+        }
+        let Some((i, prefix)) = best else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..i]);
+        let body_start = i + prefix.len();
+        let end = rest[body_start..]
+            .find(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '_' | '.' | '-'))
+            .map(|o| body_start + o)
+            .unwrap_or(rest.len());
+        let token = &rest[i..end];
+        if end - body_start >= 6 {
+            out.push_str(&mask_token(token));
+        } else {
+            out.push_str(token);
+        }
+        rest = &rest[end..];
+    }
+    out
 }
 
 #[cfg(test)]
@@ -101,12 +170,41 @@ mod tests {
     fn masking() {
         let token = "ghs_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         let masked = mask_token(token);
-        assert!(!masked.contains(&token[8..token.len().saturating_sub(4)]), "masked leaks middle");
-        assert!(masked.starts_with("ghs_abcd"), "masked keeps prefix: {masked}");
-        assert!(masked.ends_with(&(format!("(len {})", token.len()))), "masked has length");
+        assert!(
+            !masked.contains(&token[8..token.len().saturating_sub(4)]),
+            "masked leaks middle"
+        );
+        assert!(
+            masked.starts_with("ghs_abcd"),
+            "masked keeps prefix: {masked}"
+        );
+        assert!(
+            masked.ends_with(&(format!("(len {})", token.len()))),
+            "masked has length"
+        );
 
         let short = mask_token("ghs_abc");
         assert!(short.contains("****"));
         assert!(!short.contains("ghs_abc"));
+    }
+
+    #[test]
+    fn masking_embedded_tokens() {
+        let s = r#"{"token":"ghs_5745733_eyJhbGciOiJIUzI1NiJ9.payload.signature","key":"ghp_ABCDEF1234567890"}"#;
+        let masked = mask_gh_tokens(s);
+        assert!(
+            !masked.contains("eyJhbGciOiJIUzI1NiJ9.payload.signature"),
+            "{masked}"
+        );
+        assert!(!masked.contains("ghp_ABCDEF1234567890"), "{masked}");
+        assert!(masked.contains("ghs_5745"), "{masked}");
+        assert!(masked.contains("(len 50)"), "{masked}");
+
+        // Short prefix-lookalikes and plain text pass through unchanged.
+        assert_eq!(
+            mask_gh_tokens("ghs_abc and ghp_1234"),
+            "ghs_abc and ghp_1234"
+        );
+        assert_eq!(mask_gh_tokens("no tokens here"), "no tokens here");
     }
 }

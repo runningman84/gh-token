@@ -74,44 +74,49 @@ fn static_decode_key() -> &'static DecodingKey {
     use std::sync::OnceLock;
     static KEY: OnceLock<DecodingKey> = OnceLock::new();
     KEY.get_or_init(|| {
-        DecodingKey::from_rsa_pem(TEST_PUBLIC_KEY_PEM.as_bytes())
-            .expect("valid test public key")
+        DecodingKey::from_rsa_pem(TEST_PUBLIC_KEY_PEM.as_bytes()).expect("valid test public key")
     })
 }
 
 /// Verifies an app JWT: RS256 signature against the embedded test public
 /// key and `iss == MOCK_APP_ID`.
-fn verify_app_jwt(token: &str) -> Result<(), Response> {
+fn verify_app_jwt(token: &str) -> Result<(), Box<Response>> {
     let mut validation = Validation::new(Algorithm::RS256);
     validation.validate_exp = true;
-    let data = jsonwebtoken::decode::<Value>(token, static_decode_key(), &validation)
-        .map_err(|e| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "message": "Bad credentials", "jwt_error": e.to_string() })),
+    let data =
+        jsonwebtoken::decode::<Value>(token, static_decode_key(), &validation).map_err(|e| {
+            Box::new(
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "message": "Bad credentials", "jwt_error": e.to_string() })),
+                )
+                    .into_response(),
             )
-                .into_response()
         })?;
     let iss = data.claims.get("iss").and_then(Value::as_u64).unwrap_or(0);
     if iss != MOCK_APP_ID {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "message": "Bad credentials",
-                "jwt_error": format!("iss {iss} != {MOCK_APP_ID}"),
-            })),
-        )
-            .into_response());
+        return Err(Box::new(
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "message": "Bad credentials",
+                    "jwt_error": format!("iss {iss} != {MOCK_APP_ID}"),
+                })),
+            )
+                .into_response(),
+        ));
     }
     Ok(())
 }
 
 struct MockGitHubInner {
     create_count: AtomicU64,
+    token_requests: AtomicU64,
     fail_app: AtomicBool,
     fail_installation: AtomicBool,
     fail_create: AtomicBool,
     fail_probe: AtomicBool,
+    fail_rate_limited: AtomicBool,
     issued: Mutex<Vec<String>>,
 }
 
@@ -122,7 +127,8 @@ struct MockGitHubInner {
 /// - `GET /app`
 /// - `GET /app/installations/{id}`
 /// - `POST /app/installations/{id}/access_tokens`
-/// - `GET /user`
+/// - `GET /installation/repositories`
+/// - `GET /users/{login}`
 /// - `GET /rate_limit`
 pub struct MockGitHub {
     inner: Arc<MockGitHubInner>,
@@ -136,10 +142,12 @@ impl MockGitHub {
     pub async fn start() -> Self {
         let inner = Arc::new(MockGitHubInner {
             create_count: AtomicU64::new(0),
+            token_requests: AtomicU64::new(0),
             fail_app: AtomicBool::new(false),
             fail_installation: AtomicBool::new(false),
             fail_create: AtomicBool::new(false),
             fail_probe: AtomicBool::new(false),
+            fail_rate_limited: AtomicBool::new(false),
             issued: Mutex::new(Vec::new()),
         });
 
@@ -156,7 +164,11 @@ impl MockGitHub {
                 "/app/installations/{id}/access_tokens",
                 post(handler_create_token),
             )
-            .route("/user", get(handler_get_user))
+            .route(
+                "/installation/repositories",
+                get(handler_installation_repositories),
+            )
+            .route("/users/{login}", get(handler_get_user_by_login))
             .route("/rate_limit", get(handler_rate_limit))
             .with_state(inner.clone());
 
@@ -190,6 +202,11 @@ impl MockGitHub {
         self.inner.create_count.load(Ordering::Relaxed)
     }
 
+    /// All POST access_tokens requests received (including failures).
+    pub fn token_requests(&self) -> u64 {
+        self.inner.token_requests.load(Ordering::Relaxed)
+    }
+
     /// All tokens issued so far.
     pub async fn issued_tokens(&self) -> Vec<String> {
         self.inner.issued.lock().await.clone()
@@ -211,6 +228,12 @@ impl MockGitHub {
         self.inner.fail_probe.store(fail, Ordering::Relaxed);
     }
 
+    /// Makes token creation and the rate-limit probe answer with
+    /// rate-limit responses (429 / 403 with `Retry-After`).
+    pub fn set_fail_rate_limited(&self, fail: bool) {
+        self.inner.fail_rate_limited.store(fail, Ordering::Relaxed);
+    }
+
     /// Stops the mock server.
     pub async fn shutdown(&mut self) {
         self.stop.cancel();
@@ -230,11 +253,7 @@ fn bearer(headers: &axum::http::HeaderMap) -> Option<String> {
 }
 
 fn unauthorized(msg: &str) -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({ "message": msg })),
-    )
-        .into_response()
+    (StatusCode::UNAUTHORIZED, Json(json!({ "message": msg }))).into_response()
 }
 
 async fn handler_get_app(State(inner): State<Arc<MockGitHubInner>>) -> Response {
@@ -262,7 +281,7 @@ async fn handler_get_installation(
         None => return unauthorized("Bad credentials"),
     };
     if let Err(resp) = verify_app_jwt(&token) {
-        return resp.into_response();
+        return *resp;
     }
     if inner.fail_installation.load(Ordering::Relaxed) || id != MOCK_INSTALLATION_ID {
         return (
@@ -281,17 +300,33 @@ async fn handler_get_installation(
     .into_response()
 }
 
+fn rate_limited_response() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(axum::http::header::RETRY_AFTER, "1")],
+        Json(json!({
+            "message": "API rate limit exceeded for installation.",
+            "documentation_url": "https://docs.github.com/rest/overview/rate-limits-for-the-github-api",
+        })),
+    )
+        .into_response()
+}
+
 async fn handler_create_token(
     State(inner): State<Arc<MockGitHubInner>>,
     headers: axum::http::HeaderMap,
     Path(id): Path<u64>,
 ) -> Response {
+    inner.token_requests.fetch_add(1, Ordering::Relaxed);
     let token = match bearer(&headers) {
         Some(t) => t,
         None => return unauthorized("Bad credentials"),
     };
     if let Err(resp) = verify_app_jwt(&token) {
-        return resp.into_response();
+        return *resp;
+    }
+    if inner.fail_rate_limited.load(Ordering::Relaxed) {
+        return rate_limited_response();
     }
     if id != MOCK_INSTALLATION_ID {
         return (
@@ -312,8 +347,8 @@ async fn handler_create_token(
         "ghs_mock{count:06x}_{:x}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let expires_at = (Utc::now() + Duration::hours(1))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let expires_at =
+        (Utc::now() + Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     inner.issued.lock().await.push(new_token.clone());
     (
         StatusCode::CREATED,
@@ -327,7 +362,7 @@ async fn handler_create_token(
         .into_response()
 }
 
-async fn handler_get_user(
+async fn handler_installation_repositories(
     State(_inner): State<Arc<MockGitHubInner>>,
     headers: axum::http::HeaderMap,
 ) -> Response {
@@ -336,6 +371,26 @@ async fn handler_get_user(
         None => return unauthorized("Bad credentials"),
     };
     if token.starts_with("ghs_mock") {
+        // Like real GitHub: an object with a `repositories` array.
+        Json(json!({
+            "total_count": 2,
+            "repository_selection": "all",
+            "repositories": [
+                { "id": 1, "full_name": "mock-owner/mock-repo" },
+                { "id": 2, "full_name": "mock-owner/mock-repo-2" },
+            ],
+        }))
+        .into_response()
+    } else {
+        unauthorized("Bad credentials")
+    }
+}
+
+async fn handler_get_user_by_login(
+    State(_inner): State<Arc<MockGitHubInner>>,
+    Path(login): Path<String>,
+) -> Response {
+    if login == MOCK_BOT_LOGIN {
         Json(json!({
             "login": MOCK_BOT_LOGIN,
             "id": 987654321,
@@ -344,11 +399,36 @@ async fn handler_get_user(
         }))
         .into_response()
     } else {
-        unauthorized("Bad credentials")
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "message": "Not Found" })),
+        )
+            .into_response()
     }
 }
 
-async fn handler_rate_limit(State(inner): State<Arc<MockGitHubInner>>) -> Response {
+async fn handler_rate_limit(
+    State(inner): State<Arc<MockGitHubInner>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    // Like real GitHub: `GET /rate_limit` accepts installation tokens and
+    // no auth, but rejects app JWTs with 401.
+    if let Some(t) = bearer(&headers)
+        && !t.starts_with("ghs_")
+    {
+        return unauthorized("Bad credentials");
+    }
+    if inner.fail_rate_limited.load(Ordering::Relaxed) {
+        return (
+            StatusCode::FORBIDDEN,
+            [("x-ratelimit-remaining", "0"), ("x-ratelimit-reset", "0")],
+            Json(json!({
+                "message": "API rate limit exceeded for 127.0.0.1.",
+                "documentation_url": "https://docs.github.com/rest/overview/rate-limits-for-the-github-api",
+            })),
+        )
+            .into_response();
+    }
     if inner.fail_probe.load(Ordering::Relaxed) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -372,6 +452,7 @@ struct MockTokenServiceInner {
     fail_first_n: AtomicU64,
     hits: AtomicU64,
     api_key: Option<String>,
+    client_keys: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 /// A minimal mock of the gh-token server for client tests.
@@ -393,6 +474,7 @@ impl MockTokenService {
             fail_first_n: AtomicU64::new(fail_first_n),
             hits: AtomicU64::new(0),
             api_key,
+            client_keys: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
 
         let stop = CancellationToken::new();
@@ -430,6 +512,17 @@ impl MockTokenService {
         self.inner.hits.load(Ordering::Relaxed)
     }
 
+    /// Enables per-client keys (client -> key); requests for clients present
+    /// in the map must send the matching `X-GH-Token-Key` header.
+    pub fn with_client_keys(self, keys: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.inner
+            .client_keys
+            .lock()
+            .expect("client keys lock")
+            .extend(keys);
+        self
+    }
+
     pub async fn shutdown(&mut self) {
         self.stop.cancel();
         if let Some(task) = self._task.take() {
@@ -445,6 +538,7 @@ async fn handler_mock_health() -> Response {
 #[derive(Deserialize)]
 struct MockTokenQuery {
     client: Option<String>,
+    purpose: Option<String>,
 }
 
 async fn handler_mock_token(
@@ -460,21 +554,54 @@ async fn handler_mock_token(
         )
             .into_response();
     }
-    if let Some(expected) = &inner.api_key {
-        let provided = headers
-            .get("x-gh-token-key")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        if provided.as_deref() != Some(expected.as_str()) {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "invalid API key" })),
-            )
-                .into_response();
-        }
+    let provided: Option<String> = headers
+        .get("x-gh-token-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    if let Some(expected) = &inner.api_key
+        && provided.as_deref() != Some(expected.as_str())
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "invalid API key" })),
+        )
+            .into_response();
     }
-    let expires = (Utc::now() + Duration::hours(1))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let client_key_ok = match (q.client.as_deref(), provided.as_deref()) {
+        (Some(client), Some(expected))
+            if inner
+                .client_keys
+                .lock()
+                .expect("client keys lock")
+                .contains_key(client) =>
+        {
+            inner
+                .client_keys
+                .lock()
+                .expect("client keys lock")
+                .get(client)
+                .is_some_and(|k| k.as_str() == expected)
+        }
+        (Some(client), _)
+            if inner
+                .client_keys
+                .lock()
+                .expect("client keys lock")
+                .contains_key(client) =>
+        {
+            false
+        }
+        _ => true,
+    };
+    if !client_key_ok {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "invalid API key for this client" })),
+        )
+            .into_response();
+    }
+    let expires =
+        (Utc::now() + Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     Json(json!({
         "token": inner.token,
         "client": q.client.unwrap_or_else(|| "default".into()),
@@ -483,6 +610,7 @@ async fn handler_mock_token(
         "github_expires_at": expires,
         "cached": false,
         "renewed": false,
+        "purpose": q.purpose,
     }))
     .into_response()
 }

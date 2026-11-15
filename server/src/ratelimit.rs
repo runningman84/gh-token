@@ -25,10 +25,7 @@ impl RateLimiter {
     ///
     /// Returns `Some(retry_after)` when the request is rejected.
     pub fn allow(&self, client: &str) -> Option<Duration> {
-        let mut map = self
-            .entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut map = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
         let cutoff = now - self.window;
 
@@ -66,7 +63,10 @@ mod tests {
         for i in 0..3 {
             assert!(limiter.allow("c").is_none(), "request {i} should pass");
         }
-        assert!(limiter.allow("c").is_some(), "4th request should be rejected");
+        assert!(
+            limiter.allow("c").is_some(),
+            "4th request should be rejected"
+        );
     }
 
     #[test]
@@ -83,7 +83,10 @@ mod tests {
         assert!(limiter.allow("c").is_none());
         assert!(limiter.allow("c").is_some());
         sleep_ms(120);
-        assert!(limiter.allow("c").is_none(), "window expired, allowed again");
+        assert!(
+            limiter.allow("c").is_none(),
+            "window expired, allowed again"
+        );
 
         let limiter = RateLimiter::new(Duration::from_secs(60), 1);
         assert!(limiter.allow("c").is_none());
