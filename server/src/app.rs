@@ -8,7 +8,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::Router;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
-use gh_token_common::mask_token;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -17,7 +16,7 @@ use crate::github::{GithubClient, GithubError};
 use crate::http;
 use crate::metrics::Metrics;
 use crate::ratelimit::RateLimiter;
-use crate::store::{TokenRecord, TokenStore};
+use crate::store::{TokenRecord, TokenStore, token_fingerprint};
 
 fn now_nanos() -> u64 {
     SystemTime::now()
@@ -488,7 +487,9 @@ async fn watch_loop(state: Arc<ServerState>, stop: CancellationToken) {
                             .token_lifetime((now - rec.issued_at).num_seconds() as f64);
                         info!(
                             %client,
-                            token = %mask_token(&new.token),
+                            token_fingerprint = %token_fingerprint(&new.token),
+                            previous_token_fingerprint = %token_fingerprint(&rec.token),
+                            github_expires_at = %new.expires_at,
                             "watcher renewed expiring token"
                         );
                         changed = true;

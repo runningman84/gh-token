@@ -131,6 +131,73 @@ the same `X-GH-Token-Key` / `Authorization: Bearer` header (401
 the map are unaffected, and `GHTS_API_KEY` (when set) still applies on top.
 The client binary sends `--api-key` for both checks.
 
+#### Kubernetes agents with individual Secrets
+
+Use the chart's `clientAuth` mode for distinct agent identities. Each existing
+Secret must be in the gh-token release namespace; ESO can copy the same generated
+credential into the corresponding agent namespace. Do not generate it twice.
+
+```yaml
+clientAuth:
+  enabled: true
+  requireKnownClient: true
+  clients:
+    - name: agent-a
+      secretRef:
+        name: agent-a-auth
+        key: api-key
+    - name: agent-b
+      secretRef:
+        name: agent-b-auth
+        key: api-key
+```
+
+The chart mounts just these keys, read-only, at `/etc/gh-token/client-keys` with
+client IDs as filenames. It sets `GHTS_CLIENT_KEYS_DIR` and
+`GHTS_REQUIRE_KNOWN_CLIENT`. Missing Secrets/keys prevent the pod from starting;
+invalid, empty, whitespace-containing, or duplicate credentials fail server startup.
+Keys must be printable ASCII without whitespace (including trailing newlines).
+Use independently generated, high-entropy keys and globally unique client IDs
+matching `[a-z0-9_-]{1,64}`. Do not reuse a client name across namespaces.
+
+Strict mode rejects unknown client names as well as missing or wrong keys. Do not
+set a shared `GHTS_API_KEY` in this mode. File-based keys and `GHTS_CLIENT_KEYS`
+JSON are mutually exclusive. Legacy JSON mode remains non-strict by default;
+set `GHTS_REQUIRE_KNOWN_CLIENT=true` to make it an allowlist.
+
+**Rotation:** keys are loaded once at server startup. After ESO synchronizes both
+copies, restart the server and affected agents (or configure a Secret-reloader).
+There is no automatic reload or old/new key overlap in this version; coordinate
+rollouts to tolerate temporary authentication failures. Removing a client/key also
+requires a server rollout. Revoking an API key does not revoke previously issued
+GitHub tokens; these remain valid until GitHub expiry or explicit GitHub revocation.
+
+See [the complete ESO setup and agent configuration](deploy/external-secrets/README.md).
+
+#### Token isolation and investigations
+
+GitHub tokens are created and cached **per client**, never shared between different
+client IDs. Refresh and background renewal create a new token for that client only;
+the readiness probe has its own token. Replicas have independent caches, so one
+agent may legitimately have multiple valid tokens. A stable workload name shared by
+several pods is one identity; use unique names and keys to distinguish those pods.
+
+Issuance and cache-serving INFO logs include `client`, `client_key_authenticated`
+(per-client key verified), and `token_fingerprint`: the full lowercase SHA-256 of the exact
+GitHub token bytes. Background renewal logs include `client`, the new fingerprint,
+and `previous_token_fingerprint`. Retain these logs securely, together with
+Kubernetes pod/namespace metadata, to link tokens to the authenticated agent.
+Fingerprints are not credentials and are deliberately not Prometheus labels.
+Do not log API keys or raw GitHub tokens during investigations.
+
+All these tokens still represent the **same GitHub App installation/bot** and have
+the same installation permissions. A distinct token does not create a distinct
+GitHub actor or prove which pod used a stolen credential. GitHub audit events do not
+universally expose a matching token fingerprint; verify available fields in your
+GitHub plan before relying on GitHub-side correlation. The local fingerprint can
+identify a recovered token, but cannot guarantee attribution for every GitHub event.
+Use separate Apps/installations if distinct GitHub identities are required.
+
 ## Configuration (environment)
 
 | Variable                  | Default                    | Description |
@@ -140,6 +207,8 @@ The client binary sends `--api-key` for both checks.
 | `GH_APP_KEY_B64`          | — (required)               | RSA private key, base64-encoded PEM (raw PEM also accepted) |
 | `GHTS_BIND`               | `0.0.0.0:8080`             | Listen address |
 | `GHTS_API_KEY`            | *(unset = no auth)*        | Optional shared API key |
+| `GHTS_CLIENT_KEYS_DIR`    | *(unset)*                 | Directory of client-named API key files, loaded at startup; mutually exclusive with `GHTS_CLIENT_KEYS` |
+| `GHTS_REQUIRE_KNOWN_CLIENT` | `true` with keys directory, otherwise `false` | Reject unknown clients; strict mode requires nonempty client keys and forbids a shared `GHTS_API_KEY` |
 | `GHTS_CLIENT_KEYS`        | *(unset = off)*            | JSON object of per-client keys, e.g. `{"hermes":"…"}`; only listed clients are gated |
 | `GHTS_PURPOSE_KEY`        | `false`                    | When true, the token purpose is part of the cache key (differing purpose ⇒ fresh token); off by default (advisory only) |
 | `GHTS_TOKEN_TTL`          | `3600`                     | Default soft TTL in seconds (max 3600) |
@@ -324,6 +393,8 @@ convention, no prefix — standard dashboards/alerts apply unchanged):
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+bash chart/tests/client-auth.sh  # requires Helm 3+
+pre-commit run --all-files      # must pass before changes are ready
 ```
 
 The test suite includes a **mock GitHub API server** (`testutil/`) that

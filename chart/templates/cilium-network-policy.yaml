@@ -32,6 +32,9 @@ spec:
             - port: "{{ .Values.service.port }}"
               protocol: TCP
     {{- end }}
+    {{- with .Values.cilium.ingressFrom }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   egress:
     # Cluster DNS.
     - toEntities:
@@ -43,4 +46,7 @@ spec:
         - ports:
             - port: "443"
               protocol: TCP
+    {{- with .Values.cilium.egressTo }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}

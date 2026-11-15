@@ -217,7 +217,9 @@ All server config via environment variables (see README). Key ones:
 |----------|---------|
 | `GH_APP_ID`, `GH_APP_INSTALLATION_ID`, `GH_APP_KEY_B64` | Required GitHub App credentials |
 | `GHTS_API_KEY` | Optional shared API key |
-| `GHTS_CLIENT_KEYS` | JSON object of per-client keys |
+| `GHTS_CLIENT_KEYS` | JSON object of per-client keys (legacy, non-strict unless configured) |
+| `GHTS_CLIENT_KEYS_DIR` | Startup-loaded directory with one file named by client ID; mutually exclusive with JSON keys |
+| `GHTS_REQUIRE_KNOWN_CLIENT` | Reject unregistered client names; defaults to true for file keys and is mandatory in file mode |
 | `GHTS_PURPOSE_KEY` | Make purpose part of cache key |
 | `GHTS_RATE_MAX` / `GHTS_RATE_WINDOW` | Per-client rate limiting |
 | `GHTS_BACKOFF_BASE_SECS` / `GHTS_BACKOFF_MAX_SECS` | GitHub rate-limit backoff |

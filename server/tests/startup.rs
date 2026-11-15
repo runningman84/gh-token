@@ -19,6 +19,7 @@ fn base_config(github_base_url: String) -> Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         api_key: None,
         client_keys: std::collections::HashMap::new(),
+        require_known_client: false,
         purpose_key: false,
         token_ttl: 3600,
         min_ttl: 60,

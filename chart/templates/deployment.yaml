@@ -1,3 +1,26 @@
+{{- if .Values.clientAuth.enabled }}
+{{- if not .Values.clientAuth.clients }}
+{{- fail "clientAuth.enabled requires at least one client" }}
+{{- end }}
+{{- if not .Values.clientAuth.requireKnownClient }}
+{{- fail "clientAuth.enabled requires clientAuth.requireKnownClient=true" }}
+{{- end }}
+{{- range $key := list "GHTS_API_KEY" "GHTS_CLIENT_KEYS" "GHTS_CLIENT_KEYS_DIR" "GHTS_REQUIRE_KNOWN_CLIENT" }}
+{{- if or (hasKey $.Values.env $key) (hasKey $.Values.secret.data $key) }}
+{{- fail (printf "clientAuth manages authentication; remove %s from env/secret.data" $key) }}
+{{- end }}
+{{- end }}
+{{- if .Values.secret.apiKey }}
+{{- fail "clientAuth cannot be combined with secret.apiKey" }}
+{{- end }}
+{{- $names := dict }}
+{{- range .Values.clientAuth.clients }}
+{{- if hasKey $names .name }}
+{{- fail (printf "duplicate clientAuth client name: %s" .name) }}
+{{- end }}
+{{- $_ := set $names .name true }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,7 +54,19 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          {{- if .Values.clientAuth.enabled }}
+          volumeMounts:
+            - name: client-keys
+              mountPath: /etc/gh-token/client-keys
+              readOnly: true
+          {{- end }}
           env:
+            {{- if .Values.clientAuth.enabled }}
+            - name: GHTS_CLIENT_KEYS_DIR
+              value: /etc/gh-token/client-keys
+            - name: GHTS_REQUIRE_KNOWN_CLIENT
+              value: {{ .Values.clientAuth.requireKnownClient | quote }}
+            {{- end }}
             {{- range $key, $value := .Values.secret.data }}
             - name: {{ $key }}
               valueFrom:
@@ -79,6 +114,21 @@ spec:
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+      {{- if .Values.clientAuth.enabled }}
+      volumes:
+        - name: client-keys
+          projected:
+            defaultMode: 0444
+            sources:
+              {{- range .Values.clientAuth.clients }}
+              - secret:
+                  name: {{ .secretRef.name | quote }}
+                  optional: false
+                  items:
+                    - key: {{ .secretRef.key | quote }}
+                      path: {{ .name | quote }}
+              {{- end }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

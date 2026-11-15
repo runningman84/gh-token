@@ -27,6 +27,7 @@ async fn start_server(config_overrides: impl FnOnce(&mut Config)) -> TestEnv {
         bind: "127.0.0.1:0".parse().unwrap(),
         api_key: None,
         client_keys: std::collections::HashMap::new(),
+        require_known_client: false,
         purpose_key: false,
         token_ttl: 3600,
         min_ttl: 60,
@@ -762,6 +763,181 @@ async fn client_keys_enforcement() {
     // Unkeyed client is unaffected.
     let (status, _) = get(&client, &format!("{}/token?client=pi", env.base)).await;
     assert_eq!(status, 200);
+}
+
+#[tokio::test]
+async fn secret_backed_agents_have_isolated_tokens_and_strict_auth() {
+    use gh_token_server::config::load_client_keys_dir;
+    use gh_token_server::store::token_fingerprint;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("agent-a"), "key-a").unwrap();
+    std::fs::write(dir.path().join("agent-b"), "key-b").unwrap();
+    let env = start_server(|c| {
+        c.client_keys = load_client_keys_dir(dir.path()).unwrap();
+        c.require_known_client = true;
+        c.probe_interval = Duration::from_secs(3600);
+    })
+    .await;
+    let client = Client::new();
+    let url = format!("{}/token", env.base);
+
+    // A key cannot impersonate another registered agent or bypass auth by
+    // choosing an unregistered client name (GET and POST are both covered).
+    for (name, key) in [
+        ("unknown", "key-a"),
+        ("agent-b", "key-a"),
+        ("agent-a", "key-b"),
+    ] {
+        assert_eq!(
+            client
+                .get(&url)
+                .query(&[("client", name)])
+                .bearer_auth(key)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16(),
+            401
+        );
+        assert_eq!(
+            client
+                .post(&url)
+                .json(&serde_json::json!({"client": name}))
+                .header("x-gh-token-key", key)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16(),
+            401
+        );
+    }
+    assert_eq!(
+        client
+            .get(&url)
+            .query(&[("client", "agent-a")])
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16(),
+        401
+    );
+    assert!(env.state.store.is_empty().await);
+
+    let a: Value = client
+        .get(&url)
+        .query(&[("client", "agent-a")])
+        .bearer_auth("key-a")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let b: Value = client
+        .post(&url)
+        .json(&serde_json::json!({"client": "agent-b"}))
+        .header("x-gh-token-key", "key-b")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(token_of(&a), token_of(&b));
+    assert_ne!(
+        token_fingerprint(&token_of(&a)),
+        token_fingerprint(&token_of(&b))
+    );
+    for (name, key, original) in [("agent-a", "key-a", &a), ("agent-b", "key-b", &b)] {
+        let cached: Value = client
+            .get(&url)
+            .query(&[("client", name)])
+            .bearer_auth(key)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(cached["cached"], true);
+        assert_eq!(token_of(&cached), token_of(original));
+    }
+    // Refreshing A must not rotate or replace B's cached GitHub token.
+    let renewed: Value = client
+        .get(&url)
+        .query(&[("client", "agent-a"), ("refresh", "true")])
+        .bearer_auth("key-a")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(token_of(&renewed), token_of(&a));
+    assert_ne!(token_of(&renewed), token_of(&b));
+    assert_eq!(
+        env.state.store.get("agent-b").await.unwrap().token,
+        token_of(&b)
+    );
+}
+
+#[tokio::test]
+async fn watcher_preserves_agent_token_isolation() {
+    let env = start_server(|c| {
+        c.client_keys = [
+            ("agent-a".into(), "key-a".into()),
+            ("agent-b".into(), "key-b".into()),
+        ]
+        .into();
+        c.require_known_client = true;
+        c.token_ttl = 2;
+        c.min_ttl = 1;
+        c.renew_before = Duration::from_secs(1);
+        c.watch_interval = Duration::from_millis(20);
+        c.probe_interval = Duration::from_secs(3600);
+    })
+    .await;
+    let client = Client::new();
+    let mut original = Vec::new();
+    for (name, key) in [("agent-a", "key-a"), ("agent-b", "key-b")] {
+        let body: Value = client
+            .get(format!("{}/token?client={name}", env.base))
+            .bearer_auth(key)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        original.push(token_of(&body));
+    }
+    assert_ne!(original[0], original[1]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let a = env.state.store.get("agent-a").await.unwrap();
+        let b = env.state.store.get("agent-b").await.unwrap();
+        if a.token != original[0] && b.token != original[1] {
+            assert_ne!(a.token, b.token);
+            assert_ne!(a.token, original[1]);
+            assert_ne!(b.token, original[0]);
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "watcher did not renew both agents"
+        );
+        sleep(Duration::from_millis(25)).await;
+    }
 }
 
 #[tokio::test]

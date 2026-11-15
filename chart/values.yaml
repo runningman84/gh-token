@@ -75,6 +75,17 @@ resources:
     cpu: 500m
     memory: 256Mi
 
+# Existing per-agent Secrets in the gh-token namespace. No passwords in values.
+# Keys are loaded at startup: roll out server and agents after Secret rotation.
+clientAuth:
+  enabled: false
+  requireKnownClient: true
+  clients: []
+  # - name: agent-a
+  #   secretRef:
+  #     name: agent-a-auth
+  #     key: api-key
+
 podAnnotations: {}
 
 securityContext:
@@ -92,9 +103,8 @@ containerSecurityContext:
 
 # Extra configuration, passed through as environment variables.
 # See the server documentation for all GHTS_* options.
-# For per-client keys, prefer secret.data (keeps the keys out of the release
-# manifest); e.g. add GHTS_CLIENT_KEYS='{"hermes":"…"}' to the secret, or set
-# env.GHTS_CLIENT_KEYS below.
+# For per-client keys, prefer clientAuth with existing Secret references above.
+# Literal credentials in env or secret.data are stored in Helm release metadata.
 # To make the token purpose part of the cache key (differing purpose =>
 # fresh token), set env.GHTS_PURPOSE_KEY: "true" (advisory-only by default).
 env:
@@ -124,9 +134,51 @@ serviceMonitor:
 # reach out to.
 cilium:
   enabled: false
-  # Client pods that may call the token endpoint.
-  clients:
-    - namespace: hermes
-      labels:
-        app.kubernetes.io/name: hermes
+  # Client pods that may call the token endpoint. Specify your own clients;
+  # this policy allows no client pods by default.
+  clients: []
+  # Example:
+  # - namespace: my-agent
+  #   labels:
+  #     app.kubernetes.io/name: my-agent
   egressGitHubFqdn: api.github.com
+  # Additional Cilium-specific ingress rules (CiliumNetworkPolicy ingress rules).
+  # Each entry is a full Cilium ingress rule object.
+  # Example:
+  # ingressFrom:
+  #   - fromEntities:
+  #       - world
+  ingressFrom: []
+  # Additional Cilium-specific egress rules.
+  # Example:
+  # egressTo:
+  #   - toFQDNs:
+  #       - matchName: my-service.example.com
+  egressTo: []
+
+# Standard Kubernetes NetworkPolicy (works with Calico, Weave, Antrea, etc.).
+# Can be used alongside or instead of the Cilium policy.
+networkPolicy:
+  enabled: false
+  # Additional ingress rules (e.g., for custom monitoring, load balancers).
+  # Each entry is a full NetworkPolicyPeer object.
+  # Example:
+  # ingressFrom:
+  #   - podSelector:
+  #       matchLabels:
+  #         app: my-monitor
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         name: monitoring
+  ingressFrom: []
+  # Additional egress rules (e.g., for external logging, metrics).
+  # Each entry is a full NetworkPolicyPeer object.
+  # Example:
+  # egressTo:
+  #   - podSelector:
+  #       matchLabels:
+  #         app: log-collector
+  #     namespaceSelector:
+  #       matchLabels:
+  #         name: logging
+  egressTo: []
