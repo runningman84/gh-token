@@ -129,4 +129,3 @@ cilium:
     - namespace: hermes
       labels:
         app.kubernetes.io/name: hermes
-  egressGitHubFqdn: api.github.com

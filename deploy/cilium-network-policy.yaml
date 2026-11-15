@@ -1,6 +1,6 @@
 # Locks the gh-token pod down:
 # - ingress only from kubelet host probes and the configured client pods
-# - egress only to cluster DNS and api.github.com:443
+# - egress only to cluster DNS and github.com/api.github.com:443
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -31,11 +31,22 @@ spec:
             - port: "8080"
               protocol: TCP
   egress:
-    # DNS lookups.
+    # DNS lookups. Cilium's DNS proxy needs to inspect responses to populate
+    # the FQDN allowlist below.
     - toEntities:
         - kube-dns
-    # GitHub API.
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # GitHub web site and API.
     - toFQDNs:
+        - matchName: github.com
         - matchName: api.github.com
       toPorts:
         - ports:

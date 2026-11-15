@@ -191,7 +191,9 @@ Options of interest:
   (e.g. sops + external-secrets).
 - `secret.apiKey=<key>` — enable the optional API key.
 - `cilium.enabled=true` + `cilium.clients=[{namespace, labels}]` — restrict
-  who may call the server and pin egress to `api.github.com:443`.
+  who may call the server and pin egress to `github.com:443` and the configured
+  GitHub API FQDN (by default, `api.github.com:443`). DNS queries are restricted
+  to cluster DNS and inspected by Cilium for FQDN policy enforcement.
 - `serviceMonitor.enabled=true` — expose `/metrics` to prometheus-operator.
 
 The server runs in the `gh-token` namespace as a ClusterIP service at
