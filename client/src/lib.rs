@@ -73,6 +73,8 @@ pub struct Cli {
 pub enum Command {
     /// Check server liveness/readiness and exit non-zero on failure.
     Health,
+    /// Display the GitHub App's declared permissions and installation permissions.
+    Permissions,
 }
 
 impl Cli {
@@ -123,6 +125,23 @@ pub async fn run(cli: &Cli) -> Result<()> {
             if ready != "200" {
                 bail!("server is not ready (probe returned {ready})");
             }
+            Ok(())
+        }
+        Some(Command::Permissions) => {
+            let url = format!("{base_url}/permissions");
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .with_context(|| format!("request to {url} failed"))?;
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if !status.is_success() {
+                bail!("permissions request failed ({status}): {body}");
+            }
+            let report: serde_json::Value =
+                serde_json::from_str(&body).context("invalid permissions response from server")?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
         None => {

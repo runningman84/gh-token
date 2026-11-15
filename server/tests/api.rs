@@ -5,7 +5,9 @@ use std::time::Duration;
 use chrono::DateTime;
 use gh_token_server::app::Server;
 use gh_token_server::config::Config;
-use gh_token_testutil::{MOCK_APP_ID, MOCK_INSTALLATION_ID, MockGitHub, TEST_PRIVATE_KEY_PEM};
+use gh_token_testutil::{
+    MOCK_APP_ID, MOCK_APP_NAME, MOCK_INSTALLATION_ID, MockGitHub, TEST_PRIVATE_KEY_PEM,
+};
 use reqwest::Client;
 use serde_json::Value;
 use tokio::time::sleep;
@@ -45,9 +47,10 @@ async fn start_server(config_overrides: impl FnOnce(&mut Config)) -> TestEnv {
     config_overrides(&mut config);
 
     let state = Server::state(config);
-    Server::validate_startup(&state)
+    let startup_report = Server::validate_startup(&state)
         .await
         .expect("startup validation should pass");
+    state.set_startup_report(startup_report);
     state.mark_startup_ok();
     let server = Server::start(state.clone())
         .await
@@ -87,6 +90,20 @@ async fn wait_for(
         }
         sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[tokio::test]
+async fn permissions_endpoint_reports_app_and_installation_permissions() {
+    let env = start_server(|_| {}).await;
+    let (status, body) = get(&Client::new(), &format!("{}/permissions", env.base)).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["app_id"], MOCK_APP_ID);
+    assert_eq!(body["app_name"], MOCK_APP_NAME);
+    assert_eq!(body["app_permissions"]["contents"], "write");
+    assert_eq!(body["installation_id"], MOCK_INSTALLATION_ID);
+    assert_eq!(body["installation_permissions"]["pull_requests"], "write");
+    assert_eq!(body["repository_selection"], "all");
 }
 
 #[tokio::test]

@@ -45,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
     // managed to establish. Until this passes, `/ready` returns 503.
     match Server::validate_startup(&state).await {
         Ok(report) => {
+            state.set_startup_report(report.clone());
             state.mark_startup_ok();
             info!(
                 app_id = report.app_id,
