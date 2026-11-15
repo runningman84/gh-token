@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [1.1.2](https://github.com/runningman84/gh-token/compare/v1.1.1...v1.1.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* upload SBOM and scan artifacts to the release ([93666e0](https://github.com/runningman84/gh-token/commit/93666e083d64793f24da4eff089d597db20d4742))
+
 ## [1.1.1](https://github.com/runningman84/gh-token/compare/v1.1.0...v1.1.1) (2026-11-15)
 
 
