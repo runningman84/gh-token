@@ -151,7 +151,10 @@ jobs:
           V="v${VERSION}"
           MAJOR="${VERSION%%.*}"
           MINOR="$(echo "$VERSION" | cut -d. -f1,2)"
-          for TAG in "$V" "$MINOR" "$MAJOR" "latest"; do
+          # Include the plain full version (X.Y.Z) as well: the chart's
+          # default image.tag is the plain version, so without this tag the
+          # default would point at a non-existent image reference.
+          for TAG in "$V" "$VERSION" "$MINOR" "$MAJOR" "latest"; do
             docker manifest create "${IMAGE_NAME}:${TAG}" \
               "${IMAGE_NAME}:${V}-amd64" "${IMAGE_NAME}:${V}-arm64"
             docker manifest annotate "${IMAGE_NAME}:${TAG}" "${IMAGE_NAME}:${V}-amd64" --arch amd64 --os linux
