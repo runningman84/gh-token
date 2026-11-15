@@ -43,7 +43,8 @@ background), and lets clients request shorter effective lifetimes.
     (otherwise 503, with `startup_check` / `startup_error` in the body)
   - `GET /metrics` — Prometheus metrics (requests, latency, issued/renewed/
     cached tokens, GitHub errors, active tokens, rate-limit rejections,
-    GitHub rate-limit responses, cooldown)
+    GitHub rate-limit responses, cooldown, plus standard unprefixed
+    `process_*` metrics: memory, CPU time, threads, open fds, uptime)
   - Per-client sliding-window rate limiting (429 + `Retry-After`)
   - **GitHub rate-limit awareness**: detects 429 / 403 rate-limit responses
     (primary limit, secondary/abuse limits), backs off exponentially, and
@@ -264,6 +265,20 @@ gh pr view 42
 | `ghts_rate_limit_rejections_total` | counter | Rate-limit rejections |
 | `ghts_github_reachable` | gauge | Last probe outcome (1/0) |
 | `ghts_startup_check_ok` | gauge | 1 if the startup credential validation passed |
+
+Standard process metrics (names follow the Prometheus process-collector
+convention, no prefix — standard dashboards/alerts apply unchanged):
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `process_resident_memory_bytes` | gauge | Process resident memory (RSS) |
+| `process_resident_memory_peak_bytes` | gauge | Process peak RSS |
+| `process_virtual_memory_bytes` | gauge | Process virtual memory size |
+| `process_cpu_seconds_total` | counter | Process CPU time (user + system) |
+| `process_num_threads` | gauge | Number of process threads |
+| `process_open_fds` | gauge | Number of open file descriptors |
+| `process_start_time_seconds` | gauge | Unix timestamp of process start |
+| `process_uptime_seconds` | gauge | Seconds since process start |
 
 ## Development
 

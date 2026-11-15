@@ -6,5 +6,6 @@ pub mod config;
 pub mod github;
 pub mod http;
 pub mod metrics;
+pub mod process;
 pub mod ratelimit;
 pub mod store;

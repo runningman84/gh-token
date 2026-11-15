@@ -93,6 +93,7 @@ pub async fn ready(State(state): State<Arc<ServerState>>) -> Response {
 
 /// `GET /metrics` — Prometheus metrics.
 pub async fn metrics_handler(State(state): State<Arc<ServerState>>) -> Response {
+    state.metrics.update_process_metrics();
     let body = state.metrics.encode();
     (
         StatusCode::OK,

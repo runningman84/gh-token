@@ -762,3 +762,45 @@ async fn client_keys_enforcement() {
     let (status, _) = get(&client, &format!("{}/token?client=pi", env.base)).await;
     assert_eq!(status, 200);
 }
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn process_metrics_are_exposed() {
+    let env = start_server(|_| {}).await;
+    let client = Client::new();
+
+    let resp = client
+        .get(format!("{}/metrics", env.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let body = resp.text().await.unwrap();
+
+    let value = |metric: &str| -> f64 {
+        body.lines()
+            .find(|l| l.starts_with(metric))
+            .unwrap_or_else(|| panic!("{metric} not found in /metrics"))
+            .split_whitespace()
+            .next_back()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("{metric} has no numeric value"))
+    };
+
+    for metric in [
+        "process_resident_memory_bytes",
+        "process_resident_memory_peak_bytes",
+        "process_virtual_memory_bytes",
+        "process_num_threads",
+        "process_open_fds",
+        "process_start_time_seconds",
+    ] {
+        assert!(value(metric) > 0.0, "{metric} should be positive");
+    }
+    // CPU time may legitimately be tiny right after start.
+    assert!(value("process_cpu_seconds_total") >= 0.0);
+    // Uptime may legitimately be < 1s (gauge truncates) right after start.
+    assert!(value("process_uptime_seconds") >= 0.0);
+    // Virtual memory must not be smaller than the resident set.
+    assert!(value("process_virtual_memory_bytes") >= value("process_resident_memory_bytes"));
+}

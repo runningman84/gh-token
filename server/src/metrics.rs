@@ -1,7 +1,8 @@
 //! Prometheus metrics.
 
 use prometheus::{
-    Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, Opts, Registry, TextEncoder,
+    Counter, Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, Opts, Registry,
+    TextEncoder,
 };
 use std::sync::Arc;
 
@@ -29,6 +30,19 @@ pub struct Metrics {
     startup_check_ok: IntGauge,
     github_requests: IntCounterVec,
     github_request_duration: prometheus::HistogramVec,
+    // Standard process metrics (names match the Prometheus process
+    // collector conventions, no ghts_ prefix).
+    process_resident_memory_bytes: IntGauge,
+    process_resident_memory_peak_bytes: IntGauge,
+    process_virtual_memory_bytes: IntGauge,
+    process_cpu_seconds_total: Counter,
+    process_num_threads: IntGauge,
+    process_open_fds: IntGauge,
+    process_start_time_seconds: IntGauge,
+    process_uptime_seconds: IntGauge,
+    /// Last reported CPU tick count (to increment the CPU counter by the
+    /// delta; CPU time is cumulative per process).
+    process_cpu_ticks_last: std::sync::atomic::AtomicU64,
 }
 
 impl Metrics {
@@ -155,6 +169,52 @@ impl Metrics {
         )
         .expect("valid metric");
 
+        let process_resident_memory_bytes = IntGauge::new(
+            "process_resident_memory_bytes",
+            "Resident memory size of the process in bytes.",
+        )
+        .expect("valid metric");
+
+        let process_resident_memory_peak_bytes = IntGauge::new(
+            "process_resident_memory_peak_bytes",
+            "Peak resident memory size of the process in bytes.",
+        )
+        .expect("valid metric");
+
+        let process_virtual_memory_bytes = IntGauge::new(
+            "process_virtual_memory_bytes",
+            "Virtual memory size of the process in bytes.",
+        )
+        .expect("valid metric");
+
+        let process_cpu_seconds_total = Counter::new(
+            "process_cpu_seconds_total",
+            "Total user and system CPU time spent in seconds.",
+        )
+        .expect("valid metric");
+
+        let process_num_threads = IntGauge::new(
+            "process_num_threads",
+            "Number of OS threads in the process.",
+        )
+        .expect("valid metric");
+
+        let process_open_fds =
+            IntGauge::new("process_open_fds", "Number of open file descriptors.")
+                .expect("valid metric");
+
+        let process_start_time_seconds = IntGauge::new(
+            "process_start_time_seconds",
+            "Unix timestamp of the process start.",
+        )
+        .expect("valid metric");
+
+        let process_uptime_seconds = IntGauge::new(
+            "process_uptime_seconds",
+            "Seconds since the process started.",
+        )
+        .expect("valid metric");
+
         for m in [
             Box::new(token_requests.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(token_request_duration.clone()) as Box<dyn prometheus::core::Collector>,
@@ -172,6 +232,15 @@ impl Metrics {
             Box::new(startup_check_ok.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(github_requests.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(github_request_duration.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(process_resident_memory_bytes.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(process_resident_memory_peak_bytes.clone())
+                as Box<dyn prometheus::core::Collector>,
+            Box::new(process_virtual_memory_bytes.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(process_cpu_seconds_total.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(process_num_threads.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(process_open_fds.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(process_start_time_seconds.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(process_uptime_seconds.clone()) as Box<dyn prometheus::core::Collector>,
         ] {
             registry.register(m).expect("metric registration");
         }
@@ -194,6 +263,15 @@ impl Metrics {
             startup_check_ok,
             github_requests,
             github_request_duration,
+            process_resident_memory_bytes,
+            process_resident_memory_peak_bytes,
+            process_virtual_memory_bytes,
+            process_cpu_seconds_total,
+            process_num_threads,
+            process_open_fds,
+            process_start_time_seconds,
+            process_uptime_seconds,
+            process_cpu_ticks_last: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -270,6 +348,33 @@ impl Metrics {
         self.github_request_duration
             .with_label_values(&[path])
             .observe(secs);
+    }
+
+    /// Refreshes the standard `process_*` metrics for the current process
+    /// (start time/uptime on all platforms; memory/CPU/threads/fds on
+    /// Linux from `/proc/self`). Called on each `/metrics` scrape.
+    pub fn update_process_metrics(&self) {
+        let start = crate::process::start_time_unix();
+        self.process_start_time_seconds.set(start as i64);
+        self.process_uptime_seconds
+            .set(crate::process::uptime_seconds() as i64);
+        if let Some(s) = crate::process::current() {
+            self.process_resident_memory_bytes
+                .set(s.resident_memory_bytes as i64);
+            self.process_resident_memory_peak_bytes
+                .set(s.resident_memory_peak_bytes as i64);
+            self.process_virtual_memory_bytes
+                .set(s.virtual_memory_bytes as i64);
+            // CPU time is cumulative; the counter tracks the delta since
+            // the last scrape (starts at process start on first scrape).
+            let prev = self
+                .process_cpu_ticks_last
+                .swap(s.cpu_ticks, std::sync::atomic::Ordering::Relaxed);
+            self.process_cpu_seconds_total
+                .inc_by((s.cpu_ticks - prev) as f64 / 100.0);
+            self.process_num_threads.set(s.num_threads as i64);
+            self.process_open_fds.set(s.open_fds as i64);
+        }
     }
 
     /// Encodes all metrics in Prometheus text exposition format.
