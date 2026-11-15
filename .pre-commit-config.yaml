@@ -1,0 +1,104 @@
+# gh-token pre-commit hooks
+# Install: pipx install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Rust formatting - uses shell to source cargo env
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo fmt --all -- --check'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        verbose: true
+
+  # Rust clippy lints (strict)
+  - repo: local
+    hooks:
+      - id: cargo-clippy
+        name: cargo clippy (strict)
+        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo clippy --workspace --all-targets -- -D warnings'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        verbose: true
+        require_serial: false
+
+  # Rust compilation check (ensures it builds)
+  - repo: local
+    hooks:
+      - id: cargo-check
+        name: cargo check
+        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo check --workspace'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        verbose: true
+
+  # Quick unit tests (skip integration tests for speed)
+  - repo: local
+    hooks:
+      - id: cargo-test-unit
+        name: cargo test (unit only)
+        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo test --workspace --lib --bins'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        verbose: true
+        require_serial: true
+
+  # Check for common issues in Cargo.toml files
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.0
+    hooks:
+      - id: ruff
+        name: ruff check (Cargo.toml, etc.)
+        files: '\.(toml|json|yaml|md)$'
+        exclude: 'target/'
+        args: [--select=ALL, --ignore=E501]  # ignore line length
+
+  # Check for trailing whitespace, end-of-file, etc.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        name: Remove trailing whitespace
+        types: [rust, toml, yaml, json, sh]
+        exclude: 'target/'
+      - id: end-of-file-fixer
+        name: Fix end of file
+        types: [rust, toml, yaml, json, sh]
+        exclude: 'target/'
+      - id: check-yaml
+        name: Check YAML syntax
+        files: '\.(yaml|yml)$'
+        exclude: '(target/|chart/templates/)'
+      - id: check-json
+        name: Check JSON syntax
+        files: '\.json$'
+        exclude: 'target/'
+      - id: check-toml
+        name: Check TOML syntax
+        files: '\.toml$'
+        exclude: 'target/'
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+        types: [rust, toml, yaml, json, sh]
+      - id: mixed-line-ending
+        name: Fix mixed line endings
+        args: ['--fix=lf']
+        types: [rust, toml, yaml, json, sh]
+        exclude: 'target/'
+
+  # Validate conventional commit messages
+  - repo: local
+    hooks:
+      - id: commitlint
+        name: Validate commit message (Conventional Commits)
+        entry: npx --yes @commitlint/cli@19 --extends @commitlint/config-conventional --edit
+        language: system
+        stages: [commit-msg]
+        pass_filenames: true
+        verbose: true
