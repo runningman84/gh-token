@@ -1,6 +1,14 @@
 # Changelog
 
 
+## [1.1.1](https://github.com/runningman84/gh-token/compare/v1.1.0...v1.1.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **chart:** add placeholder for GH_APP_KEY_B64 to satisfy schema validation ([c8ec9df](https://github.com/runningman84/gh-token/commit/c8ec9df2cd15f4bd5fd76ca8e54398ab42b9008e))
+* correct the helm chart OCI path and use native syft/grype ([33df46d](https://github.com/runningman84/gh-token/commit/33df46db3e009c4e0ee960044fddfe9bf09193c3)), closes [charts/gh-token/#token](https://github.com/charts/gh-token//issues/token)
+
 # [1.1.0](https://github.com/runningman84/gh-token/compare/v1.0.3...v1.1.0) (2026-11-15)
 
 
