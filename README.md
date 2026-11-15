@@ -238,12 +238,49 @@ gh-token --client pi --api-key <key>
 Environment: `GHTS_URL`, `GHTS_CLIENT`, `GHTS_API_KEY`, `GHTS_PURPOSE` are
 honored.
 
-Typical agent wiring:
+### Using with the `gh` CLI
+
+The GitHub CLI authenticates with the `GH_TOKEN` environment variable, and
+this client prints just the token to stdout (logs go to stderr), so they
+compose directly. The token belongs to the GitHub App's installation, so `gh`
+acts as the bot identity — `gh auth status` will show the installation, not
+your user account.
+
+One-off:
 
 ```sh
-export GH_TOKEN="$(gh-token --client hermes)"
-gh pr view 42
+GH_TOKEN="$(gh-token --client hermes)" gh pr view 42
 ```
+
+For repeated use, define a wrapper so every `gh` invocation gets a fresh (or
+cached) token without exporting it to the whole shell:
+
+```sh
+gh() {
+  GH_TOKEN="$(gh-token --client "${GHTS_CLIENT:-hermes}")" \
+    command gh "$@"
+}
+```
+
+The wrapper inherits the client's environment, so you specify the token URL
+and client without editing it:
+
+```sh
+# Inside the cluster: in-cluster URL is the default.
+gh pr list
+
+# Outside the cluster (or against another server):
+GHTS_URL=http://gh-token.gh-token.svc.cluster.local:8080 gh pr list
+GHTS_URL=http://127.0.0.1:18080 GHTS_CLIENT=pi gh pr list
+```
+
+If the client needs an API key or a purpose, set `GHTS_API_KEY` / `GHTS_PURPOSE`
+in the same way — they are passed through to `gh-token` untouched.
+
+Note: installation tokens are `integration`-type, which GitHub does not grant
+access to the user-scoped `GET /user` endpoint. All normal repo, PR, issue,
+and API operations work, but `gh auth status` (and anything that calls
+`/user`) will return 403 — that is expected, not a broken token.
 
 ## Prometheus metrics
 
