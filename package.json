@@ -1,6 +1,6 @@
 {
   "name": "gh-token",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "description": "Release tooling (semantic-release, commitlint) for the gh-token project",
   "scripts": {

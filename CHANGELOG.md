@@ -1,6 +1,14 @@
 # Changelog
 
 
+## [1.1.3](https://github.com/runningman84/gh-token/compare/v1.1.2...v1.1.3) (2026-11-15)
+
+
+### Bug Fixes
+
+* cilium policy hostname ([2d0aaee](https://github.com/runningman84/gh-token/commit/2d0aaee85406a63affed7a1c1ab8c869ef348464))
+* use correct tag ([bb9c0a0](https://github.com/runningman84/gh-token/commit/bb9c0a05b888aa99a7fe6d1e68be5a2d2482029f))
+
 ## [1.1.2](https://github.com/runningman84/gh-token/compare/v1.1.1...v1.1.2) (2026-11-15)
 
 
