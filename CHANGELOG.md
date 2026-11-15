@@ -1,6 +1,13 @@
 # Changelog
 
 
+# [1.2.0](https://github.com/runningman84/gh-token/compare/v1.1.3...v1.2.0) (2026-11-15)
+
+
+### Features
+
+* **server:** expose GitHub app permissions ([9d426d8](https://github.com/runningman84/gh-token/commit/9d426d8408237471a749d23e926f8d76d3300897))
+
 ## [1.1.3](https://github.com/runningman84/gh-token/compare/v1.1.2...v1.1.3) (2026-11-15)
 
 
