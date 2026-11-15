@@ -75,6 +75,17 @@ resources:
     cpu: 500m
     memory: 256Mi
 
+# Existing per-agent Secrets in the gh-token namespace. No passwords in values.
+# Keys are loaded at startup: roll out server and agents after Secret rotation.
+clientAuth:
+  enabled: false
+  requireKnownClient: true
+  clients: []
+  # - name: agent-a
+  #   secretRef:
+  #     name: agent-a-auth
+  #     key: api-key
+
 podAnnotations: {}
 
 securityContext:
@@ -92,9 +103,8 @@ containerSecurityContext:
 
 # Extra configuration, passed through as environment variables.
 # See the server documentation for all GHTS_* options.
-# For per-client keys, prefer secret.data (keeps the keys out of the release
-# manifest); e.g. add GHTS_CLIENT_KEYS='{"hermes":"…"}' to the secret, or set
-# env.GHTS_CLIENT_KEYS below.
+# For per-client keys, prefer clientAuth with existing Secret references above.
+# Literal credentials in env or secret.data are stored in Helm release metadata.
 # To make the token purpose part of the cache key (differing purpose =>
 # fresh token), set env.GHTS_PURPOSE_KEY: "true" (advisory-only by default).
 env:

@@ -9,12 +9,12 @@ use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{SecondsFormat, Utc};
-use gh_token_common::{TokenResponse, is_valid_client_id, mask_token, validate_purpose};
+use gh_token_common::{TokenResponse, is_valid_client_id, validate_purpose};
 use serde::Deserialize;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::app::{ServerState, record_gh_error};
-use crate::store::TokenRecord;
+use crate::store::{TokenRecord, token_fingerprint};
 
 /// Returns a JSON error response and records metrics for it.
 fn finish(
@@ -208,6 +208,17 @@ pub async fn token(
         }
     }
 
+    if state.config.require_known_client && !state.config.client_keys.contains_key(&client) {
+        warn!(client, client_ip = %addr, "token request rejected: unregistered client");
+        return finish(
+            &state,
+            &client,
+            "401",
+            started,
+            json_error(StatusCode::UNAUTHORIZED, "invalid client credentials"),
+        );
+    }
+
     // Per-client key, when one is configured for this client (the key is
     // sent via the same X-GH-Token-Key / Authorization: Bearer header).
     if let Some(expected) = state.config.client_keys.get(&client) {
@@ -295,7 +306,10 @@ pub async fn token(
         }
         state.store.put(&client, served.clone()).await;
         state.metrics.tokens_served_cached();
-        debug!(client, client_ip = %addr, user_agent = %user_agent, token = %mask_token(&served.token), "serving cached token");
+        info!(client, client_ip = %addr, user_agent = %user_agent,
+            token_fingerprint = %token_fingerprint(&served.token),
+            client_key_authenticated = state.config.client_keys.contains_key(&client),
+            "serving cached token");
         return finish(
             &state,
             &client,
@@ -323,11 +337,15 @@ pub async fn token(
                 state.metrics.tokens_renewed();
             }
             state.metrics.set_active_tokens(state.store.len().await);
+            let previous_fingerprint = previous.as_ref().map(|old| token_fingerprint(&old.token));
             info!(
                 client,
                 client_ip = %addr,
                 user_agent = %user_agent,
-                token = %mask_token(&new.token),
+                token_fingerprint = %token_fingerprint(&new.token),
+                previous_token_fingerprint = previous_fingerprint.as_deref(),
+                client_key_authenticated = state.config.client_keys.contains_key(&client),
+                github_expires_at = %new.expires_at,
                 ttl_secs = requested_ttl,
                 purpose = ?purpose,
                 "issued new installation token"

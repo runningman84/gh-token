@@ -5,8 +5,33 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use tracing::debug;
+
+/// Stable, non-secret identifier for correlating a GitHub token with audit logs.
+/// Full SHA-256 of the exact token bytes; never put this high-cardinality value
+/// in Prometheus labels. This is not a GitHub token ID or bot identity.
+pub fn token_fingerprint(token: &str) -> String {
+    Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_fingerprint;
+
+    #[test]
+    fn fingerprints_are_full_sha256_of_exact_bytes() {
+        assert_eq!(
+            token_fingerprint("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_ne!(token_fingerprint("abc"), token_fingerprint("abc\n"));
+    }
+}
 
 /// A cached installation token for one client, with the server-enforced
 /// (soft) lifetime.

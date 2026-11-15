@@ -2,6 +2,9 @@
 
 use std::env;
 use std::net::SocketAddr;
+use std::path::Path;
+
+use anyhow::Context;
 use std::time::Duration;
 
 use base64::Engine;
@@ -45,6 +48,8 @@ pub struct Config {
     /// the matching key via `X-GH-Token-Key` / `Authorization: Bearer`;
     /// clients absent from the map are unaffected.
     pub client_keys: HashMap<String, String>,
+    /// Reject unregistered clients. Mandatory with file-based keys.
+    pub require_known_client: bool,
     /// When true, the token purpose is part of the cache key: a request
     /// whose purpose differs from the cached record's issues a fresh token
     /// (off by default: the purpose is advisory audit metadata only).
@@ -127,6 +132,35 @@ impl Config {
             anyhow::bail!("GHTS_MIN_TTL ({min_ttl}) must not exceed GHTS_TOKEN_TTL ({token_ttl})");
         }
 
+        let api_key = env::var("GHTS_API_KEY").ok().filter(|k| !k.is_empty());
+        let keys_dir = env::var("GHTS_CLIENT_KEYS_DIR")
+            .ok()
+            .filter(|path| !path.trim().is_empty());
+        let keys_json = env::var("GHTS_CLIENT_KEYS")
+            .ok()
+            .filter(|k| !k.trim().is_empty());
+        anyhow::ensure!(
+            keys_dir.is_none() || keys_json.is_none(),
+            "GHTS_CLIENT_KEYS_DIR and GHTS_CLIENT_KEYS are mutually exclusive"
+        );
+        let client_keys = match (&keys_dir, keys_json) {
+            (Some(dir), _) => load_client_keys_dir(Path::new(dir))?,
+            (_, Some(raw)) => parse_client_keys(&raw)?,
+            _ => HashMap::new(),
+        };
+        let require_known_client = match env::var("GHTS_REQUIRE_KNOWN_CLIENT") {
+            Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => true,
+            Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => false,
+            Ok(_) => anyhow::bail!("GHTS_REQUIRE_KNOWN_CLIENT: expected true or false"),
+            Err(env::VarError::NotPresent) => keys_dir.is_some(),
+            Err(e) => return Err(e.into()),
+        };
+        anyhow::ensure!(
+            keys_dir.is_none() || require_known_client,
+            "GHTS_CLIENT_KEYS_DIR requires GHTS_REQUIRE_KNOWN_CLIENT=true"
+        );
+        validate_client_auth(&client_keys, api_key.as_deref(), require_known_client)?;
+
         Ok(Self {
             app_id,
             installation_id,
@@ -136,14 +170,9 @@ impl Config {
                 .trim_end_matches('/')
                 .to_string(),
             bind,
-            api_key: env::var("GHTS_API_KEY").ok().filter(|k| !k.is_empty()),
-            client_keys: match env::var("GHTS_CLIENT_KEYS")
-                .ok()
-                .filter(|k| !k.trim().is_empty())
-            {
-                Some(raw) => parse_client_keys(&raw)?,
-                None => HashMap::new(),
-            },
+            api_key,
+            client_keys,
+            require_known_client,
             purpose_key: env::var("GHTS_PURPOSE_KEY")
                 .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
             token_ttl,
@@ -178,6 +207,65 @@ fn parse_client_keys(raw: &str) -> anyhow::Result<HashMap<String, String>> {
         validate_client_id(client).map_err(|e| anyhow::anyhow!("GHTS_CLIENT_KEYS: {e}"))?;
     }
     Ok(map)
+}
+
+/// Loads one API key per client-named file at startup. Restart after rotation.
+/// Kubernetes projected volumes use a `..data` symlink to a complete snapshot;
+/// resolve it once so a startup never combines two versions of the volume.
+/// Ordinary directories are also supported for non-Kubernetes deployments.
+pub fn load_client_keys_dir(path: &Path) -> anyhow::Result<HashMap<String, String>> {
+    let snapshot = path.join("..data");
+    let root = if snapshot.symlink_metadata().is_ok() {
+        snapshot
+            .canonicalize()
+            .context("resolving client key snapshot")?
+    } else {
+        path.to_path_buf()
+    };
+    let mut keys = HashMap::new();
+    for entry in std::fs::read_dir(&root).context("reading GHTS_CLIENT_KEYS_DIR")? {
+        let entry = entry.context("reading client key entry")?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("client key filename is not UTF-8"))?;
+        validate_client_id(&name).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            entry.path().is_file(),
+            "client key entry {name:?} is not a file"
+        );
+        let key = std::fs::read_to_string(entry.path())
+            .with_context(|| format!("reading key for client {name:?}"))?;
+        keys.insert(name, key);
+    }
+    validate_client_auth(&keys, None, false)?;
+    Ok(keys)
+}
+
+fn validate_client_auth(
+    keys: &HashMap<String, String>,
+    shared: Option<&str>,
+    strict: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !strict || !keys.is_empty(),
+        "strict client authentication requires client keys"
+    );
+    anyhow::ensure!(
+        !strict || shared.is_none(),
+        "GHTS_API_KEY cannot be combined with strict per-client authentication"
+    );
+    let mut seen = std::collections::HashSet::new();
+    for (client, key) in keys {
+        // Keys are sent in HTTP headers. Reject whitespace rather than silently
+        // trimming a credential differently on the agent and server.
+        anyhow::ensure!(
+            !key.is_empty() && key.bytes().all(|b| (33..=126).contains(&b)),
+            "API key for client {client:?} must be nonempty printable ASCII without whitespace"
+        );
+        anyhow::ensure!(seen.insert(key), "API keys must be unique per client");
+    }
+    Ok(())
 }
 
 fn parse_u64_env(name: &str) -> anyhow::Result<u64> {
@@ -250,6 +338,55 @@ mod tests {
     use super::{Config, decode_app_key};
 
     #[test]
+    fn client_key_files_validate_credentials() {
+        use super::{load_client_keys_dir, validate_client_auth};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("agent-a");
+        let b = dir.path().join("agent-b");
+        std::fs::write(&a, "secret-a").unwrap();
+        std::fs::write(&b, "secret-b").unwrap();
+        let keys = load_client_keys_dir(dir.path()).unwrap();
+        assert_eq!(keys["agent-a"], "secret-a");
+        assert_eq!(keys["agent-b"], "secret-b");
+        assert!(validate_client_auth(&keys, None, true).is_ok());
+        assert!(validate_client_auth(&keys, Some("shared"), true).is_err());
+        assert!(validate_client_auth(&Default::default(), None, true).is_err());
+        for invalid in [
+            "",
+            " ",
+            "secret-b\n",
+            "not\ta\tkey",
+            "non-ascii-ä",
+            "secret-a",
+        ] {
+            std::fs::write(&b, invalid).unwrap();
+            assert!(load_client_keys_dir(dir.path()).is_err());
+        }
+        std::fs::remove_file(&b).unwrap();
+        std::fs::write(dir.path().join("INVALID"), "key").unwrap();
+        assert!(load_client_keys_dir(dir.path()).is_err());
+        std::fs::remove_file(dir.path().join("INVALID")).unwrap();
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        assert!(load_client_keys_dir(dir.path()).is_err());
+        assert!(load_client_keys_dir(&dir.path().join("missing")).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn client_key_files_support_kubernetes_projection() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot = dir.path().join("..2026_snapshot");
+        std::fs::create_dir(&snapshot).unwrap();
+        std::fs::write(snapshot.join("agent-a"), "secret-a").unwrap();
+        symlink("..2026_snapshot", dir.path().join("..data")).unwrap();
+        symlink("..data/agent-a", dir.path().join("agent-a")).unwrap();
+        let keys = super::load_client_keys_dir(dir.path()).unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys["agent-a"], "secret-a");
+    }
+
+    #[test]
     fn decode_app_key_accepts_raw_pem_and_base64() {
         let pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIBfoo\n-----END RSA PRIVATE KEY-----";
         assert_eq!(decode_app_key(pem).unwrap(), pem);
@@ -277,6 +414,16 @@ mod tests {
         let app_id = saved("GH_APP_ID");
         let installation_id = saved("GH_APP_INSTALLATION_ID");
         let app_key = saved("GH_APP_KEY_B64");
+        let auth_vars = [
+            "GHTS_CLIENT_KEYS",
+            "GHTS_CLIENT_KEYS_DIR",
+            "GHTS_REQUIRE_KNOWN_CLIENT",
+            "GHTS_API_KEY",
+        ];
+        let auth_saved: Vec<_> = auth_vars.iter().map(|key| (*key, saved(key))).collect();
+        for key in auth_vars {
+            unsafe { std::env::remove_var(key) };
+        }
         unsafe {
             std::env::remove_var("GH_APP_ID");
             std::env::remove_var("GH_APP_INSTALLATION_ID");
@@ -314,6 +461,49 @@ mod tests {
             Some("hkey")
         );
 
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("agent-a"), "secret-a").unwrap();
+        unsafe { std::env::set_var("GHTS_CLIENT_KEYS_DIR", dir.path()) };
+        assert!(
+            Config::from_env()
+                .unwrap_err()
+                .to_string()
+                .contains("mutually exclusive")
+        );
+        unsafe { std::env::remove_var("GHTS_CLIENT_KEYS") };
+        let cfg = Config::from_env().unwrap();
+        assert!(cfg.require_known_client);
+        assert_eq!(cfg.client_keys["agent-a"], "secret-a");
+        unsafe { std::env::set_var("GHTS_REQUIRE_KNOWN_CLIENT", "false") };
+        assert!(
+            Config::from_env()
+                .unwrap_err()
+                .to_string()
+                .contains("requires GHTS_REQUIRE_KNOWN_CLIENT=true")
+        );
+        unsafe { std::env::remove_var("GHTS_REQUIRE_KNOWN_CLIENT") };
+        unsafe { std::env::set_var("GHTS_API_KEY", "shared") };
+        assert!(
+            Config::from_env()
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be combined")
+        );
+        unsafe {
+            std::env::remove_var("GHTS_API_KEY");
+            std::env::set_var("GHTS_REQUIRE_KNOWN_CLIENT", "invalid");
+        }
+        assert!(
+            Config::from_env()
+                .unwrap_err()
+                .to_string()
+                .contains("expected true or false")
+        );
+        unsafe {
+            std::env::remove_var("GHTS_REQUIRE_KNOWN_CLIENT");
+            std::env::remove_var("GHTS_CLIENT_KEYS_DIR");
+        }
+
         unsafe { std::env::set_var("GHTS_CLIENT_KEYS", "{not json") };
         let err = Config::from_env().unwrap_err().to_string();
         assert!(err.contains("GHTS_CLIENT_KEYS"), "{err}");
@@ -326,6 +516,9 @@ mod tests {
         restore("GH_APP_ID", app_id);
         restore("GH_APP_INSTALLATION_ID", installation_id);
         restore("GH_APP_KEY_B64", app_key);
+        for (key, value) in auth_saved {
+            restore(key, value);
+        }
     }
 
     fn restore(key: &str, value: Result<String, std::env::VarError>) {

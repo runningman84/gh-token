@@ -49,6 +49,16 @@ repos:
         verbose: true
         require_serial: true
 
+  # Render Secret-backed client auth and reject unsafe chart configurations.
+  - repo: local
+    hooks:
+      - id: helm-client-auth
+        name: Helm client authentication tests
+        entry: bash chart/tests/client-auth.sh
+        language: system
+        files: '^chart/'
+        pass_filenames: false
+
   # Check for common issues in Cargo.toml files
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.0
