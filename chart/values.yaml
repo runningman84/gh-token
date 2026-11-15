@@ -33,7 +33,9 @@ secret:
   data:
     GH_APP_ID: "0"
     GH_APP_INSTALLATION_ID: "0"
-    GH_APP_KEY_B64: ""
+    # REPLACE THIS with your base64-encoded GitHub App PEM key.
+    # Generate with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out key.pem && base64 -w0 key.pem
+    GH_APP_KEY_B64: "REPLACE_WITH_BASE64_ENCODED_PEM_KEY"
   # Optional shared API key. When set, clients must send it as
   # `X-GH-Token-Key` (or `Authorization: Bearer <key>`).
   apiKey: ""
