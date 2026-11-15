@@ -8,7 +8,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/runningman84/gh-token
-  tag: "0.1.0"
+  tag: "1.1.0"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

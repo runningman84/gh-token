@@ -680,7 +680,7 @@ dependencies = [
 
 [[package]]
 name = "gh-token-client"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -697,14 +697,14 @@ dependencies = [
 
 [[package]]
 name = "gh-token-common"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "gh-token-server"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "gh-token-testutil"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "axum",
  "chrono",

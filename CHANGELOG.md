@@ -1,6 +1,18 @@
 # Changelog
 
 
+# [1.1.0](https://github.com/runningman84/gh-token/compare/v1.0.3...v1.1.0) (2026-11-15)
+
+
+### Bug Fixes
+
+* bump version files before the release commit ([8c0a8cb](https://github.com/runningman84/gh-token/commit/8c0a8cb0847533b13a749417386d58de398c5bf5))
+
+
+### Features
+
+* add --version/--help to the server and log the version at startup ([8d66c29](https://github.com/runningman84/gh-token/commit/8d66c29f230b663a4426ac39698904bb528c6dcd))
+
 ## [1.0.3](https://github.com/runningman84/gh-token/compare/v1.0.2...v1.0.3) (2026-11-15)
 
 
