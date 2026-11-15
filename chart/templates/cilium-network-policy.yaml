@@ -33,12 +33,23 @@ spec:
               protocol: TCP
     {{- end }}
   egress:
-    # Cluster DNS.
+    # DNS lookups. Cilium's DNS proxy needs to inspect responses to populate
+    # the FQDN allowlist below.
     - toEntities:
         - kube-dns
-    # GitHub API.
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # GitHub web site and API.
     - toFQDNs:
-        - matchName: {{ .Values.cilium.egressGitHubFqdn }}
+        - matchName: github.com
+        - matchName: api.github.com
       toPorts:
         - ports:
             - port: "443"

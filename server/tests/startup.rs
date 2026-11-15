@@ -143,11 +143,18 @@ async fn binary_reports_not_ready_when_credentials_are_invalid() {
         if let Ok(resp) = client.get(format!("{base}/ready")).send().await
             && resp.status().as_u16() == 503
         {
-            ready_body = Some(resp.json::<serde_json::Value>().await.unwrap());
-            break;
+            let body = resp.json::<serde_json::Value>().await.unwrap();
+            // The server starts serving before its initial GitHub credential
+            // validation completes. During that window /ready is 503, but
+            // startup_error is still null; wait for the validation failure
+            // rather than mistaking the initial not-ready state for it.
+            if body["startup_error"].is_string() {
+                ready_body = Some(body);
+                break;
+            }
         }
     }
-    let body = ready_body.expect("/ready should answer 503");
+    let body = ready_body.expect("/ready should report the startup validation failure");
     assert_eq!(body["status"], "not_ready");
     assert_eq!(body["startup_check"], "failed");
     assert!(
