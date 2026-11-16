@@ -207,6 +207,11 @@ Options of interest:
   GitHub API FQDN (by default, `api.github.com:443`). DNS queries are restricted
   to cluster DNS and inspected by Cilium for FQDN policy enforcement.
 - `serviceMonitor.enabled=true` — expose `/metrics` to prometheus-operator.
+- `prometheusRules.enabled=true` — install a `PrometheusRule` with alerting
+  rules for GitHub reachability, startup validation, sustained rate-limit
+  backoff, GitHub API failures, token-endpoint 5xx/latency and client
+  throttling. The rules live in `values.yaml` (`prometheusRules.rules`), so
+  thresholds and messages can be customized in your values file.
 
 The server runs in the `gh-token` namespace as a ClusterIP service at
 `gh-token.gh-token.svc.cluster.local:8080`.

@@ -120,6 +120,110 @@ serviceMonitor:
   scrapeTimeout: 10s
   labels: {}
 
+# Prometheus alerting rules for the gh-token server (requires the
+# prometheus-operator CRDs). The rules are rendered into a PrometheusRule
+# in the group `gh_token.rules`; edit or replace `rules` to customize them.
+# Prometheus template placeholders ({{ $labels.app_id }}, {{ $labels.install_id }})
+# are available in the annotations.
+prometheusRules:
+  enabled: false
+  labels: {}
+  rules:
+    - alert: GHTokenGitHubUnreachable
+      # The readiness probe to the GitHub API keeps failing (it is also set
+      # to 0 while the rate-limit backoff suppresses the probe).
+      expr: min by (app_id, install_id) (ghts_github_reachable) == 0
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "gh-token cannot reach the GitHub API (app {{ $labels.app_id }}, installation {{ $labels.install_id }})"
+        description: >-
+          The readiness probe to the GitHub API has been failing for more
+          than 2 minutes. While the rate-limit backoff cooldown is active the
+          server suppresses GitHub calls, so token issuance is degraded or
+          blocked (HTTP 503) until GitHub is reachable again.
+    - alert: GHTokenStartupCheckFailing
+      # Startup credential validation failing; background retries (30s..300s)
+      # have not recovered for 10 minutes.
+      expr: min by (app_id, install_id) (ghts_startup_check_ok) == 0
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "gh-token startup credential validation failing (app {{ $labels.app_id }}, installation {{ $labels.install_id }})"
+        description: >-
+          The startup credential check has been failing for more than 10
+          minutes. Check the GitHub App credentials (GH_APP_ID,
+          GH_APP_INSTALLATION_ID, GH_APP_KEY_B64), the app installation, and
+          network connectivity to the GitHub API.
+    - alert: GHTokenGitHubRateLimitBackoff
+      # Sustained GitHub rate limiting: the backoff cooldown stays above
+      # 60s (a single rate-limit event decays below the `for` window).
+      expr: max by (app_id, install_id) (ghts_github_cooldown_seconds) > 60
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "gh-token is in a sustained GitHub rate-limit backoff (app {{ $labels.app_id }}, installation {{ $labels.install_id }})"
+        description: >-
+          The GitHub rate-limit cooldown has stayed above 60 seconds for more
+          than 5 minutes. GitHub is returning 429/403 rate-limit responses
+          repeatedly and the server is suppressing GitHub calls. Review the
+          token request volume, the probe interval, and the remaining rate
+          limit (ghts_github_rate_limit_remaining).
+    - alert: GHTokenGitHubApiErrors
+      # Repeated genuine GitHub API failures (transport errors, unexpected
+      # HTTP responses); rate-limited responses are not counted here.
+      expr: sum by (app_id, install_id) (increase(ghts_github_api_errors_total[10m])) > 5
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "gh-token is seeing repeated GitHub API failures (app {{ $labels.app_id }}, installation {{ $labels.install_id }})"
+        description: >-
+          More than 5 GitHub API failures were recorded in the last 10
+          minutes. Check the server logs and the operation label to identify
+          the failing endpoint.
+    - alert: GHTokenTokenEndpointErrors
+      # User-facing 5xx on the token endpoint (typically 503 during the
+      # GitHub backoff cooldown).
+      expr: sum by (app_id, install_id) (rate(ghts_token_requests_total{status=~"5[0-9][0-9]"}[5m])) > 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "gh-token token endpoint is returning 5xx errors (app {{ $labels.app_id }}, installation {{ $labels.install_id }})"
+        description: >-
+          The /token endpoint has been returning 5xx responses for more than
+          5 minutes. Clients cannot obtain installation tokens.
+    - alert: GHTokenTokenRequestsSlow
+      # p99 token request latency above 5 seconds (slow GitHub API or
+      # client retry storms).
+      expr: histogram_quantile(0.99, sum by (le, app_id, install_id) (rate(ghts_token_request_duration_seconds_bucket[5m]))) > 5
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "gh-token token request latency is high (app {{ $labels.app_id }}, installation {{ $labels.install_id }})"
+        description: >-
+          The p99 latency of /token requests has exceeded 5 seconds for more
+          than 10 minutes. This usually indicates slow GitHub API responses
+          or clients retrying while GitHub is rate limited.
+    - alert: GHTokenClientsThrottled
+      # The per-client rate limiter is rejecting requests (a client polls
+      # faster than GHTS_RATE_MAX per GHTS_RATE_WINDOW).
+      expr: sum by (app_id, install_id) (increase(ghts_rate_limit_rejections_total[10m])) > 10
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "gh-token is throttling client token requests (app {{ $labels.app_id }}, installation {{ $labels.install_id }})"
+        description: >-
+          More than 10 token requests were rejected by the per-client rate
+          limiter in the last 10 minutes. A client is requesting tokens more
+          often than expected; check its polling interval or raise the limit.
+
 # Cilium NetworkPolicy: restricts who can call the server and where it can
 # reach out to.
 cilium:
