@@ -153,6 +153,16 @@ ci: add Grype vulnerability scan to release pipeline
 feature/xxx  ──PR──▶  develop  ──PR──▶  main (triggers release)
 ```
 
+### README Update Gate — Required Before Every Push
+
+Before **every `git push`**, review the README against the complete change being
+pushed. Update the relevant README sections in the same branch whenever a
+change affects documented behavior or user-facing interfaces, including
+configuration, API/CLI usage, metrics and labels, Helm values, or deployment
+instructions. Check examples and tables for accuracy as well. Do not push until
+the README reflects those changes; avoid gratuitous edits when the change has
+no README impact, but make that determination explicitly during the review.
+
 ### Workflow
 
 1. **Create a branch** from `develop`:
