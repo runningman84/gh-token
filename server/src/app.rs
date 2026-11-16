@@ -190,12 +190,17 @@ impl ServerState {
     }
 }
 
-/// Records a GitHub API error (and, when applicable, a rate-limit response)
-/// for one operation.
+/// Records a GitHub API failure for one operation.
+///
+/// Rate-limited responses are counted only in `ghts_github_rate_limited_total`
+/// (they are expected, backoff-handled responses rather than API errors);
+/// everything else (transport failures, unexpected HTTP errors) goes to
+/// `ghts_github_api_errors_total`.
 pub(crate) fn record_gh_error(metrics: &Metrics, operation: &str, err: &GithubError) {
-    metrics.github_api_error(operation);
     if err.retry_after().is_some() {
         metrics.github_rate_limited(operation);
+    } else {
+        metrics.github_api_error(operation);
     }
 }
 
@@ -225,7 +230,7 @@ pub struct Server {
 impl Server {
     /// Builds the shared state (does not bind anything).
     pub fn state(config: Config) -> Arc<ServerState> {
-        let metrics = Metrics::new();
+        let metrics = Metrics::new(config.app_id, config.installation_id);
         Arc::new(ServerState {
             config: config.clone(),
             github: GithubClient::new(

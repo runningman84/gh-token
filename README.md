@@ -207,6 +207,11 @@ Options of interest:
   GitHub API FQDN (by default, `api.github.com:443`). DNS queries are restricted
   to cluster DNS and inspected by Cilium for FQDN policy enforcement.
 - `serviceMonitor.enabled=true` — expose `/metrics` to prometheus-operator.
+- `prometheusRules.enabled=true` — install a `PrometheusRule` with alerting
+  rules for GitHub reachability, startup validation, sustained rate-limit
+  backoff, GitHub API failures, token-endpoint 5xx/latency and client
+  throttling. The rules live in `values.yaml` (`prometheusRules.rules`), so
+  thresholds and messages can be customized in your values file.
 
 The server runs in the `gh-token` namespace as a ClusterIP service at
 `gh-token.gh-token.svc.cluster.local:8080`.
@@ -298,25 +303,52 @@ and API operations work, but `gh auth status` (and anything that calls
 
 ## Prometheus metrics
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `ghts_token_requests_total{client,status}` | counter | Token requests |
-| `ghts_token_request_duration_seconds{client}` | histogram | Token request latency |
-| `ghts_tokens_issued_total` | counter | Tokens created from GitHub |
-| `ghts_tokens_renewed_total` | counter | Renewals (fresh token for an existing client) |
-| `ghts_tokens_served_cached_total` | counter | Requests served from cache |
-| `ghts_tokens_expired_total` | counter | Expired tokens |
-| `ghts_github_api_errors_total{operation}` | counter | GitHub API errors |
-| `ghts_github_requests_total{path,status}` | counter | All requests to the GitHub API by normalized path (ids → `{id}`) and status (HTTP code, or `err` for transport failures) |
-| `ghts_github_request_duration_seconds{path}` | histogram | Duration of requests to the GitHub API |
-| `ghts_github_rate_limited_total{operation}` | counter | GitHub rate-limit responses (429/403) |
-| `ghts_github_cooldown_seconds` | gauge | Remaining seconds of the GitHub rate-limit cooldown |
-| `ghts_active_tokens` | gauge | Tracked tokens in the cache |
-| `ghts_token_lifetime_seconds` | histogram | Lifetime of issued tokens |
-| `ghts_rate_limit_rejections_total` | counter | Rate-limit rejections |
-| `ghts_github_reachable` | gauge | Last probe outcome (1/0) |
-| `ghts_startup_check_ok` | gauge | 1 if the startup credential validation passed |
-| `ghts_build_info{version}` | gauge | Build information (1 for the running version) |
+Every `ghts_*` metric carries the `app_id` and `install_id` labels (the
+GitHub App and installation this instance serves). These let you select and
+group metrics for different app installations in the same Prometheus backend;
+they do not distinguish replicas serving the same installation. Label order
+in the exposition is not significant and may be sorted by the exporter. The
+table below lists only labels in addition to `app_id` and `install_id`.
+
+| Metric | Type | Additional labels | Description |
+|--------|------|-------------------|-------------|
+| `ghts_token_requests_total` | counter | `client,status` | Token requests |
+| `ghts_token_request_duration_seconds` | histogram | `client` | Token request latency |
+| `ghts_tokens_issued_total` | counter | — | Tokens created from GitHub |
+| `ghts_tokens_renewed_total` | counter | — | Renewals (fresh token for an existing client) |
+| `ghts_tokens_served_cached_total` | counter | — | Requests served from cache |
+| `ghts_tokens_expired_total` | counter | — | Expired tokens |
+| `ghts_github_api_errors_total` | counter | `operation` | GitHub API failures (transport errors, unexpected HTTP responses; rate limits are not counted here) |
+| `ghts_github_requests_total` | counter | `path,status` | All requests to the GitHub API by path (real ids kept) and status (HTTP code, or `err` for transport failures) |
+| `ghts_github_request_duration_seconds` | histogram | `path` | Duration of requests to the GitHub API |
+| `ghts_github_rate_limited_total` | counter | `operation` | GitHub rate-limit responses (429/403) |
+| `ghts_github_rate_limit_limit` | gauge | `resource` | Maximum GitHub API requests for a rate-limit resource |
+| `ghts_github_rate_limit_used` | gauge | `resource` | GitHub API requests used for a rate-limit resource |
+| `ghts_github_rate_limit_remaining` | gauge | `resource` | GitHub API requests remaining for a rate-limit resource |
+| `ghts_github_rate_limit_reset_timestamp` | gauge | `resource` | Unix timestamp when a resource's GitHub API rate limit resets |
+| `ghts_github_cooldown_seconds` | gauge | — | Remaining seconds of the GitHub rate-limit cooldown |
+| `ghts_active_tokens` | gauge | — | Tracked tokens in the cache |
+| `ghts_token_lifetime_seconds` | histogram | — | Lifetime of issued tokens |
+| `ghts_rate_limit_rejections_total` | counter | — | Rate-limit rejections |
+| `ghts_github_reachable` | gauge | — | Last probe outcome (1/0) |
+| `ghts_startup_check_ok` | gauge | — | 1 if the startup credential validation passed |
+| `ghts_build_info` | gauge | `version` | Build information (1 for the running version) |
+
+Example scrape line:
+
+```text
+# HELP ghts_github_requests_total Requests made to the GitHub API by path and status. status is the HTTP code, or "err" for transport failures.
+# TYPE ghts_github_requests_total counter
+ghts_github_requests_total{app_id="1234567",install_id="7654321",path="/app/installations/7654321/access_tokens",status="201"} 3
+```
+
+Counters/histograms only appear once the corresponding label combination has
+occurred at least once (an absent series means zero — standard Prometheus
+semantics). Histogram `_bucket` series also have Prometheus's generated `le`
+label; `_sum` and `_count` use the labels shown above. The always-present
+state gauges (`ghts_github_reachable`, `ghts_startup_check_ok`,
+`ghts_github_cooldown_seconds`, `ghts_active_tokens`) are pre-initialized at
+startup so they are scrapeable immediately.
 
 Standard process metrics (names follow the Prometheus process-collector
 convention, no prefix — standard dashboards/alerts apply unchanged):

@@ -1,0 +1,22 @@
+{{- if .Values.prometheusRules.enabled }}
+# Alerting rules for the gh-token server. Requires the prometheus-operator
+# CRDs (like the ServiceMonitor); Prometheus instances watching
+# PrometheusRule objects pick these up automatically. The rule definitions
+# live in values.yaml (prometheusRules.rules) so they can be customized
+# without forking the template; Prometheus template placeholders
+# ($labels.app_id, $labels.install_id, ...) are supported in the values.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "gh-token.fullname" . }}
+  labels:
+    {{- include "gh-token.labels" . | nindent 4 }}
+  {{- with .Values.prometheusRules.labels }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+    - name: gh_token.rules
+      rules:
+        {{- toYaml .Values.prometheusRules.rules | nindent 8 }}
+{{- end }}

@@ -344,6 +344,13 @@ async fn metrics_endpoint_exposes_prometheus_metrics() {
         .get(format!("{}/token?client=hermes", env.base))
         .send()
         .await;
+    // A second request for the same client is served from the cache, so the
+    // `tokens_served_cached` counter gets a series (labeled metrics only
+    // expose series that were touched at least once).
+    let _ = client
+        .get(format!("{}/token?client=hermes", env.base))
+        .send()
+        .await;
     // Trigger a rate-limited response so the counter gets a series.
     env.mock.set_fail_rate_limited(true);
     let _ = client
@@ -372,11 +379,29 @@ async fn metrics_endpoint_exposes_prometheus_metrics() {
     ] {
         assert!(text.contains(metric), "metrics should contain {metric}");
     }
-    // The startup validation's `GET /app` must be recorded with path and
-    // status labels.
+    // The startup validation's `GET /app` must be recorded with the app
+    // and installation labels plus path and status labels.
+    let id_labels = format!(
+        "app_id=\"{}\",install_id=\"{}\"",
+        MOCK_APP_ID, MOCK_INSTALLATION_ID
+    );
     assert!(
-        text.contains("ghts_github_requests_total{path=\"/app\",status=\"200\"}"),
+        text.contains(&format!(
+            "ghts_github_requests_total{{{id_labels},path=\"/app\",status=\"200\"}}"
+        )),
         "metrics should contain the per-path GitHub request counter:\n{text}"
+    );
+    // The path label must carry the concrete installation id (not a
+    // `{id}` placeholder) for the token-creation endpoint.
+    assert!(
+        text.contains(&format!(
+            "path=\"/app/installations/{MOCK_INSTALLATION_ID}/access_tokens\""
+        )),
+        "metrics should contain the concrete installation id in the path label:\n{text}"
+    );
+    assert!(
+        !text.contains("{id}"),
+        "metrics must not contain the legacy `{{id}}` placeholder:\n{text}"
     );
 }
 
@@ -416,12 +441,15 @@ async fn token_request_gets_503_while_github_is_rate_limited() {
         .unwrap();
     // Both the rate-limited request and the suppressed one are counted.
     assert!(
-        text.contains("ghts_github_rate_limited_total{operation=\"create_token\"} 2"),
+        text.contains(&format!(
+            "ghts_github_rate_limited_total{{app_id=\"{}\",install_id=\"{}\",operation=\"create_token\"}} 2",
+            MOCK_APP_ID, MOCK_INSTALLATION_ID
+        )),
         "metrics should count the rate-limited token creations:\n{text}"
     );
     let cooldown = text
         .lines()
-        .find(|l| l.trim_start().starts_with("ghts_github_cooldown_seconds "))
+        .find(|l| l.trim_start().starts_with("ghts_github_cooldown_seconds{"))
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|v| v.parse::<f64>().ok());
     assert!(
