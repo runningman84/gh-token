@@ -1,6 +1,23 @@
 # Changelog
 
 
+# [2.0.0](https://github.com/runningman84/gh-token/compare/v1.2.0...v2.0.0) (2026-11-16)
+
+
+* feat(metrics)!: label all ghts_* metrics with app_id and install_id ([cfaaf16](https://github.com/runningman84/gh-token/commit/cfaaf16990473a256d27761d9a163bed821f3097))
+
+
+### Features
+
+* **chart:** add optional PrometheusRule with gh-token alerting rules ([aaccfee](https://github.com/runningman84/gh-token/commit/aaccfeed0762bcfe4c5a6afd6b8d374e8f473123)), closes [#token](https://github.com/runningman84/gh-token/issues/token)
+
+
+### BREAKING CHANGES
+
+* the label set of every ghts_* metric changed and the
+path label of ghts_github_requests_total no longer masks ids, so existing
+dashboards, alerts and recording rules must be updated.
+
 # [1.2.0](https://github.com/runningman84/gh-token/compare/v1.1.3...v1.2.0) (2026-11-15)
 
 
