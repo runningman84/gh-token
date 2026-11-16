@@ -164,36 +164,6 @@ pub struct GithubClient {
     rate: Arc<RateLimitState>,
 }
 
-/// Normalizes a request path for use as a low-cardinality metric label:
-/// digit runs of 4+ characters (ids) are replaced with `{id}`.
-fn path_label(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    let mut i = 0;
-    while let Some(c) = path[i..].chars().next() {
-        let len = c.len_utf8();
-        if c.is_ascii_digit() {
-            let start = i;
-            let mut next = path[i..].chars().next();
-            while let Some(n) = next {
-                if !n.is_ascii_digit() {
-                    break;
-                }
-                i += n.len_utf8();
-                next = path[i..].chars().next();
-            }
-            if i - start >= 4 {
-                out.push_str("{id}");
-            } else {
-                out.push_str(&path[start..i]);
-            }
-        } else {
-            out.push(c);
-            i += len;
-        }
-    }
-    out
-}
-
 impl GithubClient {
     pub fn new(
         app_id: u64,
@@ -333,11 +303,8 @@ impl GithubClient {
                     source = %chain,
                     "github api request failed"
                 );
-                self.metrics.github_request(
-                    &path_label(path),
-                    "err",
-                    started.elapsed().as_secs_f64(),
-                );
+                self.metrics
+                    .github_request(path, "err", started.elapsed().as_secs_f64());
                 return Err(GithubError::new(format!(
                     "{method} {path} request failed: {chain}"
                 )));
@@ -358,7 +325,7 @@ impl GithubClient {
             "github api request"
         );
         self.metrics
-            .github_request(&path_label(path), &status.as_u16().to_string(), elapsed);
+            .github_request(path, &status.as_u16().to_string(), elapsed);
         Ok(GithubResponse {
             status,
             body,
@@ -599,33 +566,5 @@ fn truncate(s: &str, max: usize) -> &str {
     match std::str::from_utf8(&bytes[..max]) {
         Ok(t) => t,
         Err(e) => &s[..e.valid_up_to()],
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::path_label;
-
-    #[test]
-    fn path_label_replaces_long_ids() {
-        assert_eq!(path_label("/app"), "/app");
-        assert_eq!(path_label("/rate_limit"), "/rate_limit");
-        assert_eq!(
-            path_label("/app/installations/181623044"),
-            "/app/installations/{id}"
-        );
-        assert_eq!(
-            path_label("/app/installations/181623044/access_tokens"),
-            "/app/installations/{id}/access_tokens"
-        );
-        // Short digit runs (e.g. in a slug) are kept, ids are not.
-        assert_eq!(
-            path_label("/users/hermes-agent-runningman84%5Bbot%5D"),
-            "/users/hermes-agent-runningman84%5Bbot%5D"
-        );
-        assert_eq!(
-            path_label("/repos/{owner}/{repo}/contents/12345"),
-            "/repos/{owner}/{repo}/contents/{id}"
-        );
     }
 }
